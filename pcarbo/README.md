@@ -1,6 +1,7 @@
 Here are my instructions for running a small test of multithreaded
-OpenBLAS matrix computations in R. In these instructions, "cnetid"
-should be replaced by your actual CNET id.
+OpenBLAS matrix computations in R on an AWS node with 8 CPUs
+("c5.4xlarge"). In these instructions, "cnetid" should be replaced by
+your actual CNET id.
 
 1. ssh to skyway.rcc.uchicago.edu
 
