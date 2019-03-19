@@ -9,7 +9,7 @@ instructions, "cnetid" should be replaced by your actual CNET id.
 
 3. Switch to that directory on skyway.
 
-4. Run `sbatch crossprod.sbatch`
+4. Run `sbatch crossprod.sbatch`.
 
 5. After approximately a minute or less, you should see a new file
 `crossprod.out`. The contents of this text file should look
