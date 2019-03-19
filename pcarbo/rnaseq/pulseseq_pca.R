@@ -1,14 +1,5 @@
-# Instructions for running these computations on skyway:
-#
-# 1. Download GSE103354_PulseSeq_UMI_counts.rdsfrom the Gene
-# Expression Omnibus (GEO) website accession GSE103354.
-#
-# 2. Copy these files to 
-#
-
 # SCRIPT PARAMETERS
 # -----------------
-data.dir    <- file.path("..","data")
 counts.file <- "GSE103354_PulseSeq_UMI_counts.rds"
 K           <- 13
 
@@ -17,14 +8,13 @@ K           <- 13
 library(Matrix)
 library(readr)
 library(rsvd)
-source("montoro_functions.R")
+source("pulseseq_functions.R")
 
 # READ DATA
 # ---------
-counts.file <- file.path(data.dir,counts.file)
-out         <- read.montoro.pulseseq.data(counts.file)
-samples     <- out$samples
-counts      <- out$counts
+out     <- read.montoro.pulseseq.data(counts.file)
+samples <- out$samples
+counts  <- out$counts
 rm(out)
 
 # SUMMARIZE DATA
