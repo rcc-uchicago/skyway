@@ -6,7 +6,7 @@
 #SBATCH --account=rcc-aws
 #SBATCH --exclusive
 #SBATCH --ntasks=1
-#SBATCH --constraint=c5.4xlarge
+#SBATCH --constraint=c36
 
 echo "Loading R."
 module load openblas/0.3
