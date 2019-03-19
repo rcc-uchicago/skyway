@@ -10,9 +10,9 @@ id.
 
 3. Switch to that same directory on skyway.
 
-4. Download the "pulse-seq" data, `GSE103354_PulseSeq_UMI_counts.rds`,
-   from the Gene Expression Omnibus (GEO) website, accession
-   GSE103354.
+4. Download the "pulse-seq" data (a variation of RNA-seq data),
+   `GSE103354_PulseSeq_UMI_counts.rds`, from the Gene Expression
+   Omnibus (GEO) website, accession GSE103354.
 
 5. Run `sbatch pulseseq_pca.sbatch`.
 
