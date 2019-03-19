@@ -1,11 +1,8 @@
 #!/bin/bash
 
-#SBATCH --job-name=peter
 #SBATCH --output=crossprod.out
 #SBATCH --partition=rcc-aws
 #SBATCH --account=rcc-aws
-#SBATCH --exclusive
-#SBATCH --ntasks=1
 #SBATCH --constraint=c36
 
 echo "Loading R."
