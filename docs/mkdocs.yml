@@ -1,0 +1,29 @@
+site_name: Skyway
+theme:
+   name: 'material'
+
+docs_dir: ./source
+
+extra_css:
+  - stylesheets/extra.css
+nav:
+  - Home: 'index.md'
+  - User Guide: 'user_overview.md'
+  - Developer Guide: 'developer_overview.md'
+
+markdown_extensions:
+  - admonition
+  - def_list
+  - pymdownx.superfences
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.arithmatex:
+      generic: true
+  - wikilinks
+  - tables
+  - attr_list
+  - md_in_html
+  - pymdownx.magiclink
