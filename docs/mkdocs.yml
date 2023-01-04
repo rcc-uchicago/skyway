@@ -6,6 +6,7 @@ docs_dir: ./source
 
 extra_css:
   - stylesheets/extra.css
+
 nav:
   - Home: 'index.md'
   - User Guide: 'user_overview.md'
