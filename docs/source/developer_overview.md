@@ -29,12 +29,81 @@ On the (management) node (e.g. `skyway-dev` that is accessible from the `midway3
 2. Checkout this repo into `/opt/skyway/pkgs/skyway` ((or later `pip install skyway-cloud` via [PyPI](https://pypi.org/project/Skyway-cloud/))
 3. Prepare a configuration folder `/opt/skyway/etc/`
 4. Prepare several configuration files under `/opt/skyway/etc`
-    * `root.yaml`: contain any attributes used by the management process
-    * `cloud.yaml`: contain global information for every cloud vendors and VM types (for all customers, note the differences between AWS and GCP)
-    * `skyway.yaml`: define configuration for the `skyway` python package
-    * `accounts/*.yaml`: define configuration for specific cloud accounts (see the .yaml files for setting up individual PIs and RCC's cloud accounts)
-    * `services/*.yaml`: define a service daemon process: The file name contains account (i.e. group) and partition in the format of `[group]-[cloud]`, for example, `cloud.rcc-aws.yaml`
-5. Prepare the following script under `/opt/skyway/bin`, named `skyway`:
+    * `root.yaml`: contains any attributes used by the management process.
+    * `cloud.yaml`: contains global information for every cloud vendors and VM types (for all customers, note the differences between AWS and GCP).
+    * `skyway.yaml`: defines configuration for the `skyway` python package
+    * `accounts/*.yaml`: defines configuration for specific cloud accounts (see the .yaml files for setting up individual PIs and RCC's cloud accounts)
+    * `services/*.yaml`: defines a service daemon process: The file name contains account (i.e. group) and partition in the format of `[group]-[cloud]`, for example, `cloud.rcc-aws.yaml`
+
+    Below are some examples of the configuration files:
+=== "root.xml"
+    ```
+    email: root@skyway-dev.rcc.uchicago.edu
+    ```
+=== "cloud.xml"
+    ```
+    aws:
+        master_access_key_id: 'some-string'
+        master_secret_access_key: '[another-string]'
+
+        username: centos
+        ami-id : ami-[id-string]
+        key-name: rcc-skyway
+        grace_sec: 300
+
+        node-types:
+            t1:  { name: t2.micro,    price: 0.0116, cores: 1,  memgb: 0.8 }
+            c1:  { name: c5.large,    price: 0.085,  cores: 1,  memgb: 3.5 }
+            c8:  { name: c5.4xlarge,  price: 0.68,   cores: 8,  memgb: 32 }
+        ...
+
+    gcp:
+
+    ```
+=== "skyway.xml"
+    ```
+    paths:
+        etc: <ROOT>/etc/
+        var: <ROOT>/var/
+        run: <ROOT>/run/
+        log: <ROOT>/log/
+        files: <ROOT>/files/
+
+    db:
+        host: localhost
+        port: 3306
+        username: skyway
+        password: "the-password"
+        database: skyway
+    ```
+=== "services/cloud.rcc-aws.yaml"
+    ```
+    module: cloud
+    kwargs:
+      account: rcc-aws
+    every: 15
+    active: No
+    ```
+=== "accounts/rcc-aws.yml"
+    ```
+    cloud: aws
+    group: rcc
+
+    account:
+      account_id: [account-id]
+      role_name: rcc-skyway
+      region: us-east-2
+      security_group: ['sg-[some-string]']
+      protected_nodes: []
+
+    nodes:
+      t1: 8
+
+    users:
+      - [user-name1]
+      - [user-name2]
+    ```
+Finally, prepare the following script under `/opt/skyway/bin`, named `skyway`:
 
 ```
 #!/bin/sh
