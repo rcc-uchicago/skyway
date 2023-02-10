@@ -1,0 +1,569 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="../user_overview/">
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.4.2, mkdocs-material-9.0.12">
+    
+    
+      
+        <title>Developer Guide - Skyway</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.0d440cfe.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.2505c338.min.css">
+      
+      
+
+    
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="" data-md-color-accent="">
+  
+    
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#developer-guide" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Skyway" class="md-header__button md-logo" aria-label="Skyway" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3V6m0 5h18v2H3v-2m0 5h18v2H3v-2Z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Skyway
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Developer Guide
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Skyway" class="md-nav__button md-logo" aria-label="Skyway" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    Skyway
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+      
+
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        Home
+      </a>
+    </li>
+  
+
+    
+      
+      
+      
+
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../user_overview/" class="md-nav__link">
+        User Guide
+      </a>
+    </li>
+  
+
+    
+      
+      
+      
+
+  
+  
+    
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          Developer Guide
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        Developer Guide
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#pre-requisites" class="md-nav__link">
+    Pre-requisites
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#installation-and-configuration" class="md-nav__link">
+    Installation and Configuration
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deployment" class="md-nav__link">
+    Deployment
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-commands" class="md-nav__link">
+    Common commands
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#pre-requisites" class="md-nav__link">
+    Pre-requisites
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#installation-and-configuration" class="md-nav__link">
+    Installation and Configuration
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#deployment" class="md-nav__link">
+    Deployment
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-commands" class="md-nav__link">
+    Common commands
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="developer-guide">Developer Guide</h1>
+<!-- From these links:
+https://cloud-skyway.rcc.uchicago.edu/ -->
+
+<p>This documentation provides information for admins and developers to install and deploy Skyway on a management node and login node. </p>
+<h2 id="pre-requisites">Pre-requisites</h2>
+<p>The login node and service (management) node should be installed the following software:</p>
+<ul>
+<li>SLURM</li>
+<li>NFS</li>
+</ul>
+<p>The following <code>python</code> packages are also needed to be ready to use</p>
+<ul>
+<li>miniconda</li>
+<li>boto3</li>
+<li>libcloud</li>
+<li>pysql</li>
+<li>tabulate</li>
+</ul>
+<p>The login and management nodes are set up in the same manner as for a regular login node and SLURM management node, ready for accepting jobs. If users submit jobs to on-premises compute nodes (e.g. by specifying a proper partition), the jobs will be put on a regular queue.</p>
+<h2 id="installation-and-configuration">Installation and Configuration</h2>
+<p>On the (management) node (e.g. <code>skyway-dev</code> that is accessible from the <code>midway3</code> login node):</p>
+<ol>
+<li>Create a folder named as <code>skyway</code> at root: <code>/opt/skyway</code></li>
+<li>Checkout this repo into <code>/opt/skyway/pkgs/skyway</code> ((or later <code>pip install skyway-cloud</code> via <a href="https://pypi.org/project/Skyway-cloud/">PyPI</a>)</li>
+<li>Prepare a configuration folder <code>/opt/skyway/etc/</code></li>
+<li>
+<p>Prepare several configuration files under <code>/opt/skyway/etc</code></p>
+<ul>
+<li><code>root.yaml</code>: contains any attributes used by the management process.</li>
+<li><code>cloud.yaml</code>: contains global information for every cloud vendors and VM types (for all customers, note the differences between AWS and GCP).</li>
+<li><code>skyway.yaml</code>: defines configuration for the <code>skyway</code> python package</li>
+<li><code>accounts/*.yaml</code>: defines configuration for specific cloud accounts (see the .yaml files for setting up individual PIs and RCC's cloud accounts)</li>
+<li><code>services/*.yaml</code>: defines a service daemon process: The file name contains account (i.e. group) and partition in the format of <code>[group]-[cloud]</code>, for example, <code>cloud.rcc-aws.yaml</code></li>
+</ul>
+<p>Below are some examples of the configuration files:</p>
+</li>
+</ol>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:5"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><input id="__tabbed_1_3" name="__tabbed_1" type="radio" /><input id="__tabbed_1_4" name="__tabbed_1" type="radio" /><input id="__tabbed_1_5" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">root.xml</label><label for="__tabbed_1_2">cloud.xml</label><label for="__tabbed_1_3">skyway.xml</label><label for="__tabbed_1_4">services/cloud.rcc-aws.yaml</label><label for="__tabbed_1_5">accounts/rcc-aws.yml</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code>email: root@skyway-dev.rcc.uchicago.edu
+</code></pre></div>
+</div>
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code>aws:
+    master_access_key_id: &#39;some-string&#39;
+    master_secret_access_key: &#39;[another-string]&#39;
+
+    username: centos
+    ami-id : ami-[id-string]
+    key-name: rcc-skyway
+    grace_sec: 300
+
+    node-types:
+        t1:  { name: t2.micro,    price: 0.0116, cores: 1,  memgb: 0.8 }
+        c1:  { name: c5.large,    price: 0.085,  cores: 1,  memgb: 3.5 }
+        c8:  { name: c5.4xlarge,  price: 0.68,   cores: 8,  memgb: 32 }
+    ...
+
+gcp:
+</code></pre></div>
+</div>
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code>paths:
+    etc: &lt;ROOT&gt;/etc/
+    var: &lt;ROOT&gt;/var/
+    run: &lt;ROOT&gt;/run/
+    log: &lt;ROOT&gt;/log/
+    files: &lt;ROOT&gt;/files/
+
+db:
+    host: localhost
+    port: 3306
+    username: skyway
+    password: &quot;the-password&quot;
+    database: skyway
+</code></pre></div>
+</div>
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code>module: cloud
+kwargs:
+  account: rcc-aws
+every: 15
+active: No
+</code></pre></div>
+</div>
+<div class="tabbed-block">
+<div class="highlight"><pre><span></span><code>cloud: aws
+group: rcc
+
+account:
+  account_id: [account-id]
+  role_name: rcc-skyway
+  region: us-east-2
+  security_group: [&#39;sg-[some-string]&#39;]
+  protected_nodes: []
+
+nodes:
+  t1: 8
+
+users:
+  - [user-name1]
+  - [user-name2]
+</code></pre></div>
+</div>
+</div>
+</div>
+<p>Finally, prepare the following script under <code>/opt/skyway/bin</code>, named <code>skyway</code>:</p>
+<div class="highlight"><pre><span></span><code>#!/bin/sh
+
+export SKYWAYROOT=/skyway
+export PYTHONPATH=$PYTHONPATH:/skyway/pkgs
+
+if [ &quot;`which python3 2&gt;/dev/null`&quot; = &quot;&quot; ]; then source /skyway/bin/bashrc; fi
+
+if [ &quot;$*&quot; = &quot;&quot; ]; then python3 -m skyway
+else python3 -m skyway.$*; fi
+</code></pre></div>
+<p>and give it execute-mode
+<div class="highlight"><pre><span></span><code>chmod +x /opt/skyway/bin/skyway
+</code></pre></div></p>
+<p>On the head node (e.g. <code>skyway2-login1</code>):</p>
+<ul>
+<li>What should I do on the skyway login node so that users can submit jobs through skyway? – No need to do anything– just to make sure that SLURM functions normally.</li>
+</ul>
+<h2 id="deployment">Deployment</h2>
+<ul>
+<li>On the service node? How to launch the daemon? – see above: each cloud partition (or account) needs a separate process (daemon) to be launched via <code>skyway service [name-of-the-partition]</code>: a configuration file is expected under <code>/opt/skyway/etc/services</code>, for example, <code>cloud.rcc-aws.yaml</code> for the RCC account with AWS. There is also a so-called <code>watcher</code> (defined by <code>watcher.yaml</code>) that needs to be launched to overlook all cloud services.</li>
+<li>On the login node? No need to do anything, users just submit jobs to SLURM, specifying the constraint (e.g. <code>c4</code> or <code>g1</code>) and their account, then the <code>skyway</code> watcher on the management node will periodically query the SLURM queue to send the jobs to the cloud partition.</li>
+</ul>
+<h2 id="common-commands">Common commands</h2>
+<p>The following common commands are available on the service node.</p>
+<div class="highlight"><pre><span></span><code>skyway service
+skyway service --status
+skyway service --regist billing
+skyway service --restart billing
+skyway service --restart cloud-rcc-aws
+skyway service --start cloud-rcc-aws
+skyway service --stop cloud-rcc-aws
+
+skyway cloud
+skyway cloud rcc-aws --test
+skyway cloud rcc-aws --connect rcc-aws-t1-001
+skyway cloud rcc-aws --connect rcc-io
+skyway cloud rcc-aws --ls
+skyway cloud rcc-aws --rm i-0ecb224c29fdcb688
+
+skyway billing
+skyway billing rcc-aws --set amount=10
+skyway billing rcc-aws --set rate=6.0
+skyway billing rcc-aws --summary
+
+skyway misc.db_test
+skyway misc.nodes
+skyway misc.nodes --update
+skyway misc.sendmail
+
+skyway slurm --update-conf
+</code></pre></div>
+<p>Some notes:</p>
+<ul>
+<li>Enable Skyway as a trusted operator:  Is it really possible from Skyway setting, or needs some sort of ITS support? – PIs ask ITS to use RCC Skyway to operate their AWS account: ITS is supposed to have a script that gives RCC permission to operate the given AWS account through their organizational AWS master access key.</li>
+<li>Suppose that I want to add another instance type to AWS and to GCP, what should I do? – see <code>/opt/skyway/etc/cloud.yml</code></li>
+<li>Suppose that I want to add another cloud account (AWS and GCP) for a PI, what is the protocol and how can I achieve it from the configuration file? – add another yaml file under <code>/opt/skyway/etc/accounts</code></li>
+<li>If I change the source code under <code>/opt/skyway/pkgs/skyway</code>, what are the steps to test the changes? no need to stop and restart the daemons, everything is python.</li>
+</ul>
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    <script id="__config" type="application/json">{"base": "..", "features": [], "search": "../assets/javascripts/workers/search.db81ec45.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.4b2c34cd.min.js"></script>
+      
+    
+  </body>
+</html>

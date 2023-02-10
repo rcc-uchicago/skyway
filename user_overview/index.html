@@ -1,0 +1,522 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+      
+        <link rel="prev" href="..">
+      
+      
+        <link rel="next" href="../developer_overview/">
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.4.2, mkdocs-material-9.0.12">
+    
+    
+      
+        <title>User Guide - Skyway</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.0d440cfe.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.2505c338.min.css">
+      
+      
+
+    
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../stylesheets/extra.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce((e,_)=>(e<<5)-e+_.charCodeAt(0),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="" data-md-color-accent="">
+  
+    
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#user-guide" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Skyway" class="md-header__button md-logo" aria-label="Skyway" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3V6m0 5h18v2H3v-2m0 5h18v2H3v-2Z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Skyway
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              User Guide
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.516 6.516 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5Z"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11h12Z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12 19 6.41Z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Skyway" class="md-nav__button md-logo" aria-label="Skyway" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54Z"/></svg>
+
+    </a>
+    Skyway
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+      
+
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        Home
+      </a>
+    </li>
+  
+
+    
+      
+      
+      
+
+  
+  
+    
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          User Guide
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        User Guide
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#gaining-access" class="md-nav__link">
+    Gaining Access
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#connecting" class="md-nav__link">
+    Connecting
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-jobs" class="md-nav__link">
+    Running Jobs
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    Troubleshooting
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+      
+
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../developer_overview/" class="md-nav__link">
+        Developer Guide
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#gaining-access" class="md-nav__link">
+    Gaining Access
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#connecting" class="md-nav__link">
+    Connecting
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#running-jobs" class="md-nav__link">
+    Running Jobs
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    Troubleshooting
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="user-guide">User Guide</h1>
+<!-- From these links:
+https://cloud-skyway.rcc.uchicago.edu/ -->
+
+<p>This documentation briefly explains how regular users access to Skyway and submit jobs to use cloud services. Please refer to the <a href="https://cloud-skyway.rcc.uchicago.edu/">Skyway</a> home page for more information and news.</p>
+<h2 id="gaining-access">Gaining Access</h2>
+<p>You first need an active RCC User account (see <a href="https://rcc.uchicago.edu/accounts-allocations">accounts and allocations page</a>). Next, you should contact your PI or class instructors for access to Skyway. Alternatively, you can reach out to our Help Desk at <a href="mailto:help@rcc.uchicago.edu">help@rcc.uchicago.edu</a> for assistance.</p>
+<h2 id="connecting">Connecting</h2>
+<p>Once your RCC User account is active, you log in to the Midway cluster with your <code>CNetID</code>
+<div class="highlight"><pre><span></span><code>  ssh [CNetID]@midway2.rcc.uchicago.edu
+</code></pre></div>
+then log in to Skyway from Midway2:
+<div class="highlight"><pre><span></span><code>  ssh [CNetID]@skyway.rcc.uchicago.edu
+</code></pre></div>
+If successful, you will get access to the Skyway login node, where you can access to the following locations:</p>
+<ol>
+<li><code>/home/[CNetID]</code>
+This is the temporary home directory (no backup) for users on Skyway. Note, this is NOT the home file system on Midway, so you won’t see any contents from your home directory on midway. Please do NOT store any sizable or important data here. (<code>TODO</code>: Add note here about changing $HOME environment variable to <code>/cloud/aws/[CNetID]</code>.)</li>
+<li><code>/project</code> and <code>/project2</code>
+This is the RCC high-performance capacity storage file systems from Midway, mounted on Skyway, with the same quotas and usages as on Midway. Just as with running jobs on Midway, /project and /project2 should be treated as the location for users to store the data they intend to keep. This also acts as a way to make data accessible between Skyway and midway as the /project and /project2 filesystems are mounted on both systems.
+Run <code>cd /project/&lt;labshare&gt;</code> or <code>/project2/&lt;labshare&gt;</code>, where <code>&lt;labshare&gt;</code> is the name of the lab account, to access the files by your lab or group. This will work even if the lab share directory does not appear in a file listing, e.g., <code>ls /project</code>.</li>
+<li><code>/cloud/[cloud]/[CNetID]</code>
+Options of [cloud]: aws or gcp
+This is the cloud scratch folder (no backup), which is intended for read/write of cloud compute jobs. For example, with Amazon cloud resources (AWS) The remote cloud S3 AWS bucket storage is mounted to Skyway at this path. Before submitting jobs to the cloud compute resources, users must first stage the data, scripts and executables their cloud job will use to the /cloud/aws/[CNetID] folder. After running their cloud compute job, users should then copy the data they wish to keep from the /cloud/aws/[CNetID] folder back to their project folder. Similarly, if users are using Google Cloud Platform (GCP), the scratch folder /cloud/gcp/[CNetID] should be used.</li>
+</ol>
+<p>You can create your own folders, upload data, write and compile codes, prepare job scripts and submit jobs in a similar manner to what you do on <a href="https://rcc.uchicago.edu/docs/using-midway/index.html">Midway</a>.</p>
+<p>Skyway provides compiled software packages (i.e. <code>modules</code>) that you can load to build your codes or run your jobs. The list of the modules is given in the <a href="https://cloud-skyway.rcc.uchicago.edu/">Skyway</a> home page.</p>
+<h2 id="running-jobs">Running Jobs</h2>
+<p>You submit jobs to SLURM in a similar manner to what do on <a href="../midway23/midway_getting_started.md">Midway</a>. The difference is that you should specify different partitions and accounts corresponding to the cloud services you have access to (e.g. AWS or GCP). Additionally, the instance configuration should be specified via <code>--constraint</code>.</p>
+<p>To submit jobs to cloud, you must specify a type of virtual machine (VM) by the option <code>--constraint=[VM Type]</code>. The VM types currently supported through Skyway can be found in the table below. You can also get an up-to-date listing of the machine types by running command sinfo-node-types on a skyway login node.</p>
+<table>
+<thead>
+<tr>
+<th><div style="width:100px">VM Type</div></th>
+<th>Description</th>
+<th>AWS EC2 Instance</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>t1</td>
+<td>1 core, 1G Mem (for testing and building software)</td>
+<td>t2.micro</td>
+</tr>
+<tr>
+<td>c1</td>
+<td>1 core, 4G Mem (for serial jobs)</td>
+<td>c5.large</td>
+</tr>
+<tr>
+<td>c8</td>
+<td>8 cores, 32G Mem (for medium sized multicore jobs)</td>
+<td>c5.4xlarge</td>
+</tr>
+<tr>
+<td>c36</td>
+<td>36 cores, 144G Mem (for large memory jobs)</td>
+<td>c5.18xlarge</td>
+</tr>
+<tr>
+<td>m24</td>
+<td>24 cores, 384G Mem (for large memory jobs)</td>
+<td>c5.12xlarge</td>
+</tr>
+<tr>
+<td>g1</td>
+<td>1x V100 GPU (for GPU jobs)</td>
+<td>p3.2xlarge</td>
+</tr>
+<tr>
+<td>g4</td>
+<td>4x V100 GPU (for heavy GPU jobs)</td>
+<td>p3.8xlarge</td>
+</tr>
+<tr>
+<td>g8</td>
+<td>8x V100 GPU (for heavy GPU jobs)</td>
+<td>p3.16xlarge</td>
+</tr>
+</tbody>
+</table>
+<p>When submitting jobs, include following two options in the job script:</p>
+<ul>
+<li><code>--partition=rcc-aws</code></li>
+<li><code>--account=rcc-aws</code></li>
+</ul>
+<p>Some commonly used SLURM commands are:</p>
+<ul>
+<li><strong>sinfo</strong> – Show compute nodes status</li>
+<li><strong>sbatch</strong> – Submit computing jobs</li>
+<li><strong>scancel</strong> – Cancel submitted jobs</li>
+<li><strong>sacct</strong> – Check logs of recent jobs</li>
+</ul>
+<p>A sample job script <code>sample.sbatch</code> would look like this</p>
+<div class="highlight"><pre><span></span><code>#!/bin/sh
+
+#SBATCH --job-name=TEST
+#SBATCH --partition=rcc-aws
+#SBATCH --account=rcc-aws
+#SBATCH --exclusive
+#SBATCH --ntasks=1
+#SBATCH --constraint=t2 # Specifies you would like to use a t2 instance
+
+cd $SLURM_SUBMIT_DIR
+
+hostname
+lscpu
+lscpu --extended
+free -h
+</code></pre></div>
+<p>You can also request interactive jobs for testing and debugging purpuses:
+<div class="highlight"><pre><span></span><code>   sinteractive --partition=rcc-aws --constraint=t2 --ntasks=1
+</code></pre></div>
+and with GPUs
+<div class="highlight"><pre><span></span><code>   sinteractive --partition=rcc-aws --constraint=g1 --ntasks=1 --gres=gpu:1
+</code></pre></div></p>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<p>For further assistance, please contact our Help Desk at <a href="mailto:help@rcc.uchicago.edu">help@rcc.uchicago.edu</a>.</p>
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    <script id="__config" type="application/json">{"base": "..", "features": [], "search": "../assets/javascripts/workers/search.db81ec45.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.4b2c34cd.min.js"></script>
+      
+    
+  </body>
+</html>
