@@ -1,0 +1,9 @@
+:root > * {
+  --md-primary-fg-color:        #A00508;
+  --md-primary-fg-color--light: #Af2b2b;
+  --md-primary-fg-color--dark:  #5c0303;
+}
+
+img[src*="#shadow"] {
+  box-shadow: 0 4px 8px 0 rgba(0, 0, 0, 0.2), 0 6px 20px 0 rgba(0, 0, 0, 0.19);
+}
