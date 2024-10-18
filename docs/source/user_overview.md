@@ -1,9 +1,6 @@
 # User Guide
-<!-- From these links:
-https://cloud-skyway.rcc.uchicago.edu/ -->
 
-This documentation briefly explains how regular users access to Skyway and submit jobs to use cloud services. Please refer to the [Skyway](https://cloud-skyway.rcc.uchicago.edu/) home page for more information and news.
-
+This documentation explains how regular users access to Skyway and submit jobs to use cloud services. Please refer to the [Skyway](https://cloud-skyway.rcc.uchicago.edu/) home page for more information and news.
 
 ## Gaining Access
 
@@ -11,86 +8,141 @@ You first need an active RCC User account (see [accounts and allocations page](h
 
 ## Connecting
 
-Once your RCC User account is active, you log in to the Midway cluster with your `CNetID`
-```
-  ssh [CNetID]@midway2.rcc.uchicago.edu
-```
-then log in to Skyway from Midway2:
-```
-  ssh [CNetID]@skyway.rcc.uchicago.edu
-```
-If successful, you will get access to the Skyway login node, where you can access to the following locations:
+You need to log in to the HPC cluster.
 
-1. `/home/[CNetID]`
-This is the temporary home directory (no backup) for users on Skyway. Note, this is NOT the home file system on Midway, so you won’t see any contents from your home directory on midway. Please do NOT store any sizable or important data here. (`TODO`: Add note here about changing $HOME environment variable to `/cloud/aws/[CNetID]`.)
-2. `/project` and `/project2`
-This is the RCC high-performance capacity storage file systems from Midway, mounted on Skyway, with the same quotas and usages as on Midway. Just as with running jobs on Midway, /project and /project2 should be treated as the location for users to store the data they intend to keep. This also acts as a way to make data accessible between Skyway and midway as the /project and /project2 filesystems are mounted on both systems.
-Run `cd /project/<labshare>` or `/project2/<labshare>`, where `<labshare>` is the name of the lab account, to access the files by your lab or group. This will work even if the lab share directory does not appear in a file listing, e.g., `ls /project`.
-3. `/cloud/[cloud]/[CNetID]`
-Options of [cloud]: aws or gcp
-This is the cloud scratch folder (no backup), which is intended for read/write of cloud compute jobs. For example, with Amazon cloud resources (AWS) The remote cloud S3 AWS bucket storage is mounted to Skyway at this path. Before submitting jobs to the cloud compute resources, users must first stage the data, scripts and executables their cloud job will use to the /cloud/aws/[CNetID] folder. After running their cloud compute job, users should then copy the data they wish to keep from the /cloud/aws/[CNetID] folder back to their project folder. Similarly, if users are using Google Cloud Platform (GCP), the scratch folder /cloud/gcp/[CNetID] should be used.
+```
+ssh -Y [cnetid]@midway3.rcc.uchicago.edu
+```
 
-You can create your own folders, upload data, write and compile codes, prepare job scripts and submit jobs in a similar manner to what you do on [Midway](https://rcc.uchicago.edu/docs/using-midway/index.html).
+For Midway3 users, 
 
-Skyway provides compiled software packages (i.e. `modules`) that you can load to build your codes or run your jobs. The list of the modules is given in the [Skyway](https://cloud-skyway.rcc.uchicago.edu/) home page.
+```
+  module use /project/rcc/shared/modulefiles
+  module load skyway
+```
 
 ## Running Jobs
 
-You submit jobs to SLURM in a similar manner to what do on [Midway](../midway23/midway_getting_started.md). The difference is that you should specify different partitions and accounts corresponding to the cloud services you have access to (e.g. AWS or GCP). Additionally, the instance configuration should be specified via `--constraint`.
+You submit jobs to cloud in a similar manner to what do on your HPC cluster. The difference is that you should specify different partitions and accounts corresponding to the cloud services you have access to. Additionally, the instance configuration should be specified via `--constraint`.
+
+1) List all the node types available to an account
+```
+skyway_nodetypes --account=your-aws-account
+skyway_nodetypes --account=your-gcp-account
+```
 
 To submit jobs to cloud, you must specify a type of virtual machine (VM) by the option `--constraint=[VM Type]`. The VM types currently supported through Skyway can be found in the table below. You can also get an up-to-date listing of the machine types by running command sinfo-node-types on a skyway login node.
 
-|  <div style="width:100px">VM Type</div> | Description |  AWS EC2 Instance |
-| ----------- | ----------- | ----------- |
-| t1  | 1 core, 1G Mem (for testing and building software) | t2.micro    |
-| c1  | 1 core, 4G Mem (for serial jobs)                   | c5.large    |
-| c8  | 8 cores, 32G Mem (for medium sized multicore jobs) | c5.4xlarge  |
-| c36 | 36 cores, 144G Mem (for large memory jobs)         | c5.18xlarge |
-| m24 | 24 cores, 384G Mem (for large memory jobs)         | c5.12xlarge |
-| g1  | 1x V100 GPU (for GPU jobs)                         | p3.2xlarge  |
-| g4  | 4x V100 GPU (for heavy GPU jobs)                   | p3.8xlarge  |
-| g8  | 8x V100 GPU (for heavy GPU jobs)                   | p3.16xlarge |
+|  <div style="width:100px">VM Type</div> | Configuration | Description |  AWS EC2 Instance |
+| ----------- | ----------- | ----------- |  ----------- |
+| t1  | 1 core, 1GB RAM | for testing and building software | t2.micro    |
+| c1  | 1 core, 4B RAM | for serial jobs                   | c5.large    |
+| c8  | 8 cores, 32GB RAM | for medium sized multicore jobs | c5.4xlarge  |
+| c36 | 36 cores, 144GB RAM | for large memory jobs         | c5.18xlarge |
+| g1  | 4 cores, 61 GB RAM, 1x V100 GPU | for GPU jobs                         | p3.2xlarge  |
+| g4  | 16 cores, 244 GB RAM, 4x V100 GPU | for heavy GPU jobs                   | p3.8xlarge  |
+| g5  | 8 cores, 32 GB RAM, 1x A10G GPU | for heavy GPU jobs                   | p5.2xlarge  |
+| m24 | 24 cores, 384GB RAM | for large memory jobs         | c5.12xlarge |
 
-When submitting jobs, include following two options in the job script:
+2) Allocate/provision an instance
+  ```
+  skyway_alloc --account=rcc-aws --constraint=t1 --time=01:00:00
+  ```
+  For a GPU instance, use
+  ```
+  skyway_alloc -A rcc-aws --constraint=g5 --time=00:30:00
+  ```
 
-* `--partition=rcc-aws`
-* `--account=rcc-aws`
+3) List all the running VMs with an account
+  ```
+  skyway_list --account=rcc-aws
+  ```
 
-Some commonly used SLURM commands are:
+4) Transfer data to the instance named your-run
+  ```
+  skyway_transfer --account=rcc-aws -J your-run training.py
+  ```
 
-* __sinfo__ – Show compute nodes status
-* __sbatch__ – Submit computing jobs
-* __scancel__ – Cancel submitted jobs
-* __sacct__ – Check logs of recent jobs
+5) Connect to the VM named your-run
+  ```
+  skyway_connect --account=rcc-aws your-run
+  ```
 
-A sample job script `sample.sbatch` would look like this
+Once on the VM, do
+  ```
+  nvidia-smi
+  source activate pytorch
+  python training.py > ~/output.txt
+  scp output.txt [yourcnetid]@midway3.rcc.uchicago.edu:~/
+  exit
+  ```
+At this point, there would be a file named output.txt in your Midway3 home folder.
 
-```
-#!/bin/sh
+6) Cancel/terminate/cancel a job
+  ```
+  skyway_cancel --account=rcc-aws [job_name]
+  ```
 
-#SBATCH --job-name=TEST
-#SBATCH --partition=rcc-aws
-#SBATCH --account=rcc-aws
-#SBATCH --exclusive
-#SBATCH --ntasks=1
-#SBATCH --constraint=t2 # Specifies you would like to use a t2 instance
+Expected behavior: The jobs (VMs) got terminated. When run `skyway_list` (step 3 above) the VM will not be present.
 
-cd $SLURM_SUBMIT_DIR
+The following steps are for launching interactive and batch jobs.
 
-hostname
-lscpu
-lscpu --extended
-free -h
-```
+7) Submit an interactive job (combinig steps 4, 6 and 7)
 
-You can also request interactive jobs for testing and debugging purpuses:
-```
-   sinteractive --partition=rcc-aws --constraint=t2 --ntasks=1
-```
-and with GPUs
-```
-   sinteractive --partition=rcc-aws --constraint=g1 --ntasks=1 --gres=gpu:1
-```
+  7a) to AWS
+  ```
+  skyway_interative --account=rcc-aws --constraint=t1 --time=01:00:00
+  ```
+  For a GPU instance, use
+  ```
+  skyway_interative --account=rcc-aws --constraint=g5 -t 00:30:00
+  ```
+
+  7b) to midway3
+  ```
+  skyway_interactive --account=rcc-midway3 --constraint=t1 --time=01:00:00
+  ```
+Expected behavior: the user lands on a compute node or a VM on a separate terminal.
+
+8) Submit a batch job
+
+A sample job script `job_script.sh` would look like this
+
+  ```
+  #!/bin/sh
+
+  #SBATCH --job-name=your-run
+  #SBATCH --account=rcc-aws
+  #SBATCH --constraint=g1
+
+  source activate pytorch
+  python training.py
+  ```
+
+
+  8a) Submit the job
+  ```
+  skyway_batch job_script.sh
+  ```
+  8b) Connect to the VM to check the current progress of the run (like step 7)
+  ```
+  skyway_connect -A rcc-aws -J your-run
+  ```
+  
+  Once on the VM:
+  ```
+  ls -lrt
+  cat output.txt
+  exit
+  ``` 
+  
+  8c) Transfer output data from cloud
+  ```
+  skyway_transfer --account=rcc-aws -J your-run --from-cloud --cloud-path=~/model*.pkl .
+  ```
+
+  8d) Cancel the job (like step 6)
+
 
 
 ## Troubleshooting

@@ -1,0 +1,198 @@
+#!/usr/bin/env python
+import argparse
+from datetime import datetime, timezone
+from io import StringIO
+import os
+import sys
+from subprocess import PIPE, Popen
+
+import skyway
+from skyway.cloud.aws import *
+from skyway.cloud.gcp import *
+from skyway.cloud.azure import *
+from skyway.cloud.slurm import *
+from skyway.cloud.oci import *
+
+from skyway import account
+
+import colorama
+from colorama import Fore
+
+# export SKYWAYROOT=/project/rcc/trung/skyway-github
+#./skyway_batch job_script.sh
+
+class InstanceDescriptor:
+    def __init__(self, jobname: str, account_name: str, node_type: str, walltime: str, vendor_name: str):
+        self.jobname = jobname
+        self.account_name = account_name
+        self.node_type = node_type
+        self.walltime = walltime
+        self.vendor_name = vendor_name
+
+        self.account = None
+        if 'aws' in vendor_name:
+            self.account = AWS(account_name)
+        elif 'gcp' in vendor_name:
+            self.account = GCP(account_name)
+        elif 'azure' in vendor_name:
+            self.account = AZURE(account_name)
+        elif 'midway3' in vendor_name:
+            self.account = SLURMCluster(account_name)
+
+        self.user = os.environ['USER']
+
+    def submitJob(self, script_name=None):
+        print(f"creating node from {self.vendor_name} with account {self.account_name}")
+        nodes = self.account.create_nodes(self.node_type, [self.jobname], need_confirmation=False, walltime=self.walltime)
+        
+        # execute the commands listed in the script on the compute node
+        if script_name is not None:
+            if "midway3" in self.vendor_name:
+                # for on-premises like midway3 instanceID is the host ip (which happens to be the node name)
+                instanceID = self.account.get_host_ip(self.jobname)
+                self.account.execute_script(instanceID, script_name)
+
+            elif "aws" in self.vendor_name:
+                instanceID = self.account.get_instance_ID(self.jobname)
+                self.account.execute_script(instanceID, script_name)
+
+            elif "gcp" in self.vendor_name:
+                instanceID = self.account.get_instance_ID(self.jobname)
+                self.account.execute_script(instanceID, script_name)
+
+        return nodes
+
+    def connectJob(self, node_names):
+        '''
+        only get on a on-premise compute node for now with rcc-staff
+        '''
+        
+        if "midway3" in self.vendor_name:
+            # for on-premises like midway3 instanceID is the host ip (which happens to be the node name)
+            instanceID = self.account.get_host_ip(self.jobname)
+            self.account.connect_node(instanceID)
+
+        elif "aws" in self.vendor_name:
+            instanceID = self.account.get_instance_ID(self.jobname)
+            self.account.connect_node(instanceID)
+
+        elif "gcp" in self.vendor_name:
+            instanceID = self.account.get_instance_ID(self.jobname)
+            self.account.connect_node(instanceID)
+
+    def terminateJob(self, node_names = []):
+        if "midway3" in self.vendor_name:
+            instanceID = self.account.get_instance_ID(self.jobname)
+            self.account.destroy_nodes(IDs=[instanceID], need_confirmation=False)
+        else:
+            self.account.destroy_nodes(node_names=node_names, need_confirmation=False)
+
+    def getBalance(self):
+        # retrieve from database for the given account
+        accumulating_cost, remaining_balance = self.account.get_cost_and_usage_from_db(user_name=self.user)
+        return remaining_balance
+
+    def getEstimateCost(self):
+        pt = datetime.strptime(self.walltime, "%H:%M:%S")
+        walltime_in_hours = int(pt.hour + pt.minute/60)
+        if "midway3" in self.vendor_name:
+            unit_price = 1.0 # float(self.account.get_unit_price(self.node_type))
+        else:
+            unit_price = float(self.account.get_unit_price(self.node_type))
+        cost = walltime_in_hours * unit_price
+        return cost
+  
+    def list_nodes(self):
+        nodes, list_of_nodes = self.account.list_nodes(verbose=False) 
+        return nodes
+
+'''
+   parse the job script to get the account information, node type (constraint) and walltime
+'''
+def parse_script(filename):
+    jobname = ""
+    account = ""
+    constraint = ""
+    walltime = ""
+    
+    with open(filename, 'r') as f:
+        lines = f.readlines()
+        for line in lines:
+            # extract only lines with #SBATCH, remove \n characters
+            # remove all the spaces
+            # split at '='
+            if "#SBATCH" in line:
+                # remove #SBATCH
+                line = line.replace('#SBATCH ','').strip('\n')
+                line = line.replace(' ','')
+                args = line.split('=')
+                if len(args) == 2:
+                    if args[0] == "-job-name":
+                        jobname = args[1]
+                    if args[0] == "--account":
+                        account = args[1]
+                    if args[0] == "--constraint":
+                        constraint = args[1]
+                    if args[0] == "--time":
+                        walltime = args[1]                        
+            else:
+                continue
+
+    return { 'jobname': jobname,
+             'account': account,
+             'constraint': constraint,
+             'walltime': walltime,
+            }
+
+if __name__ == "__main__":
+
+    colorama.init(autoreset=True)
+
+    msg = "Skyway Advisor"
+    print(Fore.GREEN + msg)
+    script = sys.argv[1]
+    args = parse_script(script)
+
+    job_name = args['jobname']
+    #account_name = args['account']
+    node_type = args['constraint']
+    walltime = args['walltime']
+
+    # get the env variable SKYWAYROOT
+    skywayroot = os.environ['SKYWAYROOT']
+    if skywayroot == "":
+        raise Exception("SKYWAYROOT is not defined.")
+
+    
+    # list all node types in the accounts that the group rcc have access to
+    all_accounts = account.accounts()
+
+    data = []
+    # iterate through the accounts and find the similar node types
+    for acct_name in all_accounts:
+        if "rcc" in acct_name:
+            if 'aws' in acct_name:
+                acct = AWS(acct_name)
+            elif 'gcp' in acct_name:
+                acct = GCP(acct_name)
+            elif 'azure' in acct_name:
+                acct = AZURE(acct_name)
+            elif 'oci' in acct_name:
+                acct = OCI(acct_name)
+            elif 'midway' in acct_name:
+                acct = SLURMCluster(acct_name)
+            else:
+                continue           
+            if node_type in acct.vendor['node-types']:
+                data.append([acct_name,
+                             acct.vendor['node-types'][node_type]['name'],
+                             acct.vendor['node-types'][node_type]['price'],
+                             acct.onpremises,
+                            ])
+            
+    print("Available accounts and instances for {script}:")
+    print(tabulate(data, headers=['Account', 'Instance Type', 'Per-hour Cost', 'On-premises']))
+    print("")
+
+
+    
