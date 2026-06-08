@@ -417,10 +417,10 @@ class AZURE(Cloud):
         if separate_terminal == True:
             cmd = "gnome-terminal --title='Connecting to the node' -- bash -c "
             cmd += f" 'ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{public_ip}; exec bash' "
-            os.system(cmd)
         else:
             cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{public_ip}"
-            os.system(cmd)
+
+        os.system(cmd)
 
         return node_info
 

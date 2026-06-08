@@ -337,8 +337,8 @@ class AWS(Cloud):
             cmd += f" 'module purge; ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com; exec bash' "
         else:
             cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com"
-        #os.system(cmd)
-        subprocess.run(cmd, shell=True, text=True, capture_output=True)
+
+        os.system(cmd)
 
         node_info = {
             'private_key' : self.my_ssh_private_key,
