@@ -23,13 +23,15 @@ from skyway.cloud.oci import *
 from skyway import utils
 
 class InstanceDescriptor:
-    def __init__(self, jobname: str, account_name: str, node_type: str, walltime: str, vendor_name: str, image_id: str, separate_terminal: bool):
+    def __init__(self, jobname: str, account_name: str, node_type: str, walltime: str, vendor_name: str,
+                image_id: str, location: str, separate_terminal: bool):
         self.jobname = jobname
         self.account_name = account_name
         self.node_type = node_type
         self.walltime = walltime
         self.vendor_name = vendor_name
         self.image_id = image_id
+        self.location = location
         self.separate_terminal = separate_terminal
 
         self.account = None
@@ -55,7 +57,8 @@ class InstanceDescriptor:
                                            need_confirmation=True,
                                            walltime=self.walltime,
                                            interactive=True,
-                                           image_id=self.image_id)
+                                           image_id=self.image_id,
+                                           location=self.location,)
 
         # connect to the node with jobname: used to work as expected
         #    21Aug2024: create_nodes with interactive==False would skip over the connectJob step below, no idea why
@@ -127,6 +130,7 @@ if __name__ == "__main__":
     parser.add_argument('-c', '--constraint', dest='constraint', default="", help="Node type")
     parser.add_argument('-t', '--time', dest='walltime', default="", help="Walltime")
     parser.add_argument('-i', '--image-id', dest='image_id', default="", help="Custom boot image")
+    parser.add_argument('-l', '--location', dest='location', default="", help="Custom location")
     parser.add_argument('-s', '--separate-terminal', action='store_true', default=False, help="Open in a separate terminal")
     
     args = parser.parse_args()
@@ -136,6 +140,7 @@ if __name__ == "__main__":
     node_type = args.constraint
     walltime = args.walltime
     image_id = args.image_id
+    location = args.location
     separate_terminal = args.separate_terminal
     provider = ""
     
@@ -160,7 +165,7 @@ if __name__ == "__main__":
         raise Exception("SKYWAYROOT is not defined.")
 
     # create an instance descriptor (like with the dashboard)
-    instanceDescriptor = InstanceDescriptor(job_name, account_name, node_type, walltime, vendor_name, image_id, separate_terminal)
+    instanceDescriptor = InstanceDescriptor(job_name, account_name, node_type, walltime, vendor_name, image_id, location, separate_terminal)
 
     # submit job
     nodes = instanceDescriptor.submitJob()

@@ -138,7 +138,7 @@ class OCI(Cloud):
             print("", file=output_str)
         return nodes, output_str
 
-    def create_nodes(self, node_type: str, node_names = [], interactive = False, need_confirmation = True, walltime = None, image_id = ""):
+    def create_nodes(self, node_type: str, node_names = [], interactive = False, need_confirmation = True, walltime = None, image_id = "", location = ""):
         """Member function: create_compute
         Create a group of compute instances(nodes, servers, virtual-machines 
         ...) with the given type.
@@ -192,6 +192,7 @@ class OCI(Cloud):
             self.account['compartment_id']
         )
         availability_domain = list_availability_domains_response.data[0]
+        print(f"\nLocation: {availability_domain}\n")
 
         vm_image = self.account['image_id']
         if image_id != "":

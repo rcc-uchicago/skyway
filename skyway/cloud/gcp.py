@@ -254,7 +254,7 @@ class GCP(Cloud):
             print("", file=output_str)
         return nodes, output_str
     
-    def create_nodes(self, node_type: str, node_names = [], interactive = False, need_confirmation = True, walltime = None, image_id = ""):
+    def create_nodes(self, node_type: str, node_names = [], interactive = False, need_confirmation = True, walltime = None, image_id = "", location = ""):
         """Member function: create_compute
         Create a group of compute instances(nodes, servers, virtual-machines 
         ...) with the given type.
@@ -291,7 +291,12 @@ class GCP(Cloud):
 
         print(Fore.BLUE + f"Allocating {count} instance ...", end=" ")
 
-        location_name = self.account['location']
+        if location != "":
+           location_name = location
+        else:
+           location_name = self.account['location']
+        print(f"\nLocation: {location_name}\n")
+
         vpc_name = self.account.get('vpc_name', 'vpc1')
 
         nodes = {}

@@ -139,7 +139,7 @@ class AZURE(Cloud):
             print("", file=output_str)
         return nodes, output_str            
 
-    def create_nodes(self, node_type: str, node_names = [], interactive = False, need_confirmation = True, walltime = None, image_id = ""):
+    def create_nodes(self, node_type: str, node_names = [], interactive = False, need_confirmation = True, walltime = None, image_id = "", location = ""):
 
         if node_type not in self.vendor['node-types']:
             raise Exception(f'Node type {node_type} is not available in this account.')
@@ -178,7 +178,12 @@ class AZURE(Cloud):
         pt = datetime.strptime(walltime_str, "%H:%M:%S")
         walltime_in_minutes = int(pt.hour * 60 + pt.minute + pt.second/60)
 
-        location_name = 'Central US'  # Replace with your desired location
+        if location != "":
+           location_name = location
+        else:
+           location_name = 'Central US'
+        print(f"\nLocation: {location_name}\n")
+        #location_name = 'Central US'  # Replace with your desired location
         #locations = self.driver.list_locations()
         #location = next((loc for loc in locations if loc.name == location_name), None)
         #if location is None:
