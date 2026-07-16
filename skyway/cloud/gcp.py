@@ -227,12 +227,20 @@ class GCP(Cloud):
                 
                 # Calculate the running time
                 if node.state == "running":
-                    running_time = current_time - creation_time
+                    # since restart_nodes() prepends to the database with instance ID every time
+                    # finds the first row with instance ID to find its start time
+                    first_found_idx = df[df['InstanceID'] == node.id].index[0]
+                    start_time = pd.to_datetime(df.loc[first_found_idx, 'Start'], format='%Y-%m-%dT%H:%M:%S.%f%z')
+                    running_time = current_time - start_time #creation_time
                 else:
                     df_node = df.loc[df['InstanceID'] == node.id]
                     if df_node.empty == False:
+                        # since restart_nodes() prepends to the database with instance ID every time
+                        # finds the first row with instance ID to find its start time
+                        first_found_idx = df[df['InstanceID'] == node.id].index[0]
+                        start_time = pd.to_datetime(df.loc[first_found_idx, 'Start'], format='%Y-%m-%dT%H:%M:%S.%f%z')
                         end_time = pd.to_datetime(df_node['End'].iloc[0], format='%Y-%m-%dT%H:%M:%S.%f%z')
-                        running_time = end_time - creation_time
+                        running_time = end_time - start_time #creation_time
                     else:
                         continue
 

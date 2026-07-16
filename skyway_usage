@@ -110,7 +110,10 @@ if __name__ == "__main__":
             print("")
         else:
             headers = ['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance']
-
             print(df)
 
-    print("NOTE: The usage and balance reported do not include the cost of running instances.")
+    print("NOTE:")
+    if byjob == True:
+        print("  + The cost of running instances estimated from the wall time requested.")    
+    print("  + The usage and balance will be updated after running instances are terminated or stopped.")    
+    
