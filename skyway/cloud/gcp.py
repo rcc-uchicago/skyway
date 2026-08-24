@@ -436,6 +436,12 @@ class GCP(Cloud):
 
             except libcloud.common.google.ResourceNotFoundError as e:
                 print(f'Error: Resource not found. Details: {e}')
+            except RuntimeError as e:
+                print(f"SSH setup failed for {node_name}: {str(e)}. Terminating instance to avoid unbounded charges.")
+                try:
+                    self.driver.destroy_node(node)
+                except Exception:
+                    pass
             except libcloud.common.google.GoogleBaseError as e:
                 print(f'Google Cloud error occurred: {e}')
             except Exception as e:
