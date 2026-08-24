@@ -543,7 +543,7 @@ class GCP(Cloud):
                 current_time_str = current_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
 
                 # store the record into the database
-                data = [node_user_name, node.id, node.size, creation_time, current_time_str, running_cost, remaining_balance]
+                data = [node_user_name, node.id, node.size, creation_time_str, current_time_str, running_cost, remaining_balance]
 
                 if os.path.isfile(self.usage_history):
                     df = pd.read_pickle(self.usage_history)
@@ -776,7 +776,7 @@ class GCP(Cloud):
                 current_time_str = current_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
 
                 # store the record into the database
-                data = [node_user_name, node.id, node.size, creation_time, current_time_str, running_cost, remaining_balance]
+                data = [node_user_name, node.id, node.size, creation_time_str, current_time_str, running_cost, remaining_balance]
 
                 if os.path.isfile(self.usage_history):
                     df = pd.read_pickle(self.usage_history)
