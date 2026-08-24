@@ -229,7 +229,10 @@ class GCP(Cloud):
                 if node.state == "running":
                     # since restart_nodes() prepends to the database with instance ID every time
                     # finds the first row with instance ID to find its start time
-                    first_found_idx = df[df['InstanceID'] == node.id].index[0]
+                    df_node = df.loc[df['InstanceID'] == node.id]
+                    if df_node.empty:
+                        continue
+                    first_found_idx = df_node.index[0]
                     start_time = pd.to_datetime(df.loc[first_found_idx, 'Start'], format='%Y-%m-%dT%H:%M:%S.%f%z')
                     running_time = current_time - start_time #creation_time
                 else:
