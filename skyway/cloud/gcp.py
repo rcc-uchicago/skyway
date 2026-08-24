@@ -246,7 +246,7 @@ class GCP(Cloud):
 
                 # Calculate the running cost
                 instance_unit_cost = self.get_unit_price_instance(node)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
 
                 node_user_name = self.get_instance_user_name(node)
 
@@ -390,7 +390,7 @@ class GCP(Cloud):
 
                 running_time = timedelta(hours=pt.hour, minutes=pt.minute, seconds=pt.second)
                 instance_unit_cost = self.get_unit_price_instance(node)
-                projected_running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                projected_running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
                 end_time = creation_time + running_time
                 end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
@@ -516,7 +516,7 @@ class GCP(Cloud):
                 current_time = datetime.now(timezone.utc)
                 running_time = current_time - creation_time
                 instance_unit_cost = self.get_unit_price_instance(node)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
 
                 if need_confirmation == True:
                     response = input(f"Do you want to stop {node.name} (running cost ${running_cost})? NOTE: Data on the node will be removed. (y/n) ")
@@ -528,7 +528,7 @@ class GCP(Cloud):
                 # record the running time and cost
                 running_time = current_time - creation_time
                 instance_unit_cost = self.get_unit_price_instance(node)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
 
                 current_time_str = current_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
@@ -631,7 +631,7 @@ class GCP(Cloud):
 
                 running_time = timedelta(hours=pt.hour, minutes=pt.minute, seconds=pt.second)
                 instance_unit_cost = self.get_unit_price_instance(node)
-                projected_running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                projected_running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
                 end_time = creation_time + running_time
                 end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
@@ -746,7 +746,7 @@ class GCP(Cloud):
                 current_time = datetime.now(timezone.utc)
                 running_time = current_time - creation_time
                 instance_unit_cost = self.get_unit_price_instance(node)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
 
                 if need_confirmation == True:
                     response = input(f"Do you want to destroy {node.name} (running cost ${running_cost})? NOTE: Data on the node will be removed. (y/n) ")
@@ -758,7 +758,7 @@ class GCP(Cloud):
                 # record the running time and cost
                 running_time = current_time - creation_time
                 instance_unit_cost = self.get_unit_price_instance(node)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
 
                 current_time_str = current_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
@@ -889,7 +889,7 @@ class GCP(Cloud):
                     running_time = current_time - creation_time
 
                     instance_unit_cost = self.get_unit_price_instance(node)
-                    running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                    running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                     total_cost = total_cost + running_cost
 
                     nodes.append([node.name, node.size, node.id, node.public_ips[0], running_time, running_cost])

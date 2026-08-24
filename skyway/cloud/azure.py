@@ -124,7 +124,7 @@ class AZURE(Cloud):
             node_type = node.hardware_profile.vm_size
             instance_unit_cost = self.get_unit_price_instance(node)
             
-            running_cost = running_time.seconds/3600.0 * instance_unit_cost
+            running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
             state = self.get_instance_status(node)
             public_ip = self.get_host_ip(node.name)
             nodes.append([node.name, node.tags.get('user'), state, node_type, node.vm_id, public_ip, running_time, running_cost])
@@ -498,7 +498,7 @@ class AZURE(Cloud):
             # get the node type
             node_type = node.hardware_profile.vm_size
             instance_unit_cost = self.get_unit_price_instance(node)
-            running_cost = running_time.seconds/3600.0 * instance_unit_cost
+            running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
 
             if need_confirmation == True:
                 response = input(f"Do you want to destroy {node.name} (running cost ${running_cost:0.5f})? NOTE: Data on the node will be removed. (y/n) ")
@@ -506,7 +506,7 @@ class AZURE(Cloud):
                     continue
             # record the running time and cost
             running_time = datetime.now(timezone.utc) - creation_time
-            running_cost = running_time.seconds/3600.0 * instance_unit_cost
+            running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
             usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
             
             # store the record into the database
@@ -911,7 +911,7 @@ class AZURE(Cloud):
                     node_type = node.hardware_profile.vm_size
 
                     instance_unit_cost = self.get_unit_price_instance(node)
-                    running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                    running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                     total_cost = total_cost + running_cost
 
                     nodes.append([node.name, node_type, running_time, running_cost])

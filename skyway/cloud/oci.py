@@ -250,7 +250,7 @@ class OCI(Cloud):
             
         running_time = timedelta(hours=pt.hour, minutes=pt.minute, seconds=pt.second)
         instance_unit_cost = self.get_unit_price_instance(instance)
-        projected_running_cost = running_time.seconds/3600.0 * instance_unit_cost
+        projected_running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
         usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
         end_time = instance.time_created + running_time
 
@@ -422,7 +422,7 @@ class OCI(Cloud):
 
                 running_time = datetime.now(timezone.utc) - instance.time_created
                 instance_unit_cost = self.get_unit_price_instance(instance)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
 
                 response = input(f"Do you want to terminate the node {instance.id} (running cost ${running_cost:0.5f})? NOTE: Data on the node will be removed. (y/n) ")
                 if response != 'y':
@@ -443,7 +443,7 @@ class OCI(Cloud):
                 end_time = datetime.now(timezone.utc)
                 running_time = end_time - instance.time_created
                 instance_unit_cost = self.get_unit_price_instance(instance)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
 
                 # store the record into the database
@@ -496,7 +496,7 @@ class OCI(Cloud):
 
                 running_time = datetime.now(timezone.utc) - instance.time_created
                 instance_unit_cost = self.get_unit_price_instance(instance)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
 
                 args = {
                     'preserve_boot_volume': True,
@@ -513,7 +513,7 @@ class OCI(Cloud):
                 end_time = datetime.now(timezone.utc)
                 running_time = end_time - instance.time_created
                 instance_unit_cost = self.get_unit_price_instance(instance)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
 
                 # store the record into the database
@@ -613,7 +613,7 @@ class OCI(Cloud):
                 end_time = datetime.now(timezone.utc)
                 running_time = end_time - instance.time_created
                 instance_unit_cost = self.get_unit_price_instance(instance)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
 
                 # store the record into the database
@@ -922,7 +922,7 @@ class OCI(Cloud):
                 launch_time_str = instance.time_created.strftime("%Y-%m-%dT%H:%M:%S.%f%z")
                 running_time = datetime.now(timezone.utc) - instance.time_created
                 instance_unit_cost = self.get_unit_price_instance(instance)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 total_cost = total_cost + running_cost
                 nodes.append([self.get_instance_name(instance),
                                     instance.state['Name'], 

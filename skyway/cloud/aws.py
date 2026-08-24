@@ -267,7 +267,7 @@ class AWS(Cloud):
             
             running_time = timedelta(hours=pt.hour, minutes=pt.minute, seconds=pt.second)
             instance_unit_cost = self.get_unit_price_instance(instance)
-            projected_running_cost = running_time.seconds/3600.0 * instance_unit_cost
+            projected_running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
             usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
             end_time = instance.launch_time + running_time
 
@@ -437,7 +437,7 @@ class AWS(Cloud):
             if check_nodename or check_id:
                 running_time = datetime.now(timezone.utc) - instance.launch_time
                 instance_unit_cost = self.get_unit_price_instance(instance)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 instance_user_name = self.get_instance_user_name(instance)
                 if instance_user_name != user_name:
                     print(f"Cannot destroy an instance {instance_name} created by other users")
@@ -454,7 +454,7 @@ class AWS(Cloud):
                 end_time = datetime.now(timezone.utc)
                 running_time = end_time - instance.launch_time
                 instance_unit_cost = self.get_unit_price_instance(instance)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
 
                 # store the record into the database
@@ -504,7 +504,7 @@ class AWS(Cloud):
 
                 running_time = datetime.now(timezone.utc) - instance.launch_time
                 instance_unit_cost = self.get_unit_price_instance(instance)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 instance_user_name = self.get_instance_user_name(instance)
                 if instance_user_name != user_name:
                     print(f"Cannot stop an instance {instance_name} created by other users")
@@ -516,7 +516,7 @@ class AWS(Cloud):
                 end_time = datetime.now(timezone.utc)
                 running_time = end_time - instance.launch_time
                 instance_unit_cost = self.get_unit_price_instance(instance)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
 
                 # store the record into the database
@@ -937,7 +937,7 @@ class AWS(Cloud):
 
                 running_time = datetime.now(timezone.utc) - instance.launch_time
                 instance_unit_cost = self.get_unit_price_instance(instance)
-                running_cost = running_time.seconds/3600.0 * instance_unit_cost
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 total_cost = total_cost + running_cost
                 nodes.append([self.get_instance_name(instance),
                                     instance.state['Name'], 
