@@ -201,7 +201,7 @@ class AWS(Cloud):
         if image_id != "":
             vm_image = image_id
 
-        instances = self.ec2.create_instances(
+        create_kwargs = dict(
             ImageId          = vm_image,                  # self.vendor['ami_id']
             KeyName          = self.account['key_name'],  # self.vendor['key_name']
             SecurityGroupIds = self.account['security_group'],
@@ -224,6 +224,9 @@ class AWS(Cloud):
                 },
 
             ])
+        if location:
+            create_kwargs['Placement'] = {'AvailabilityZone': location}
+        instances = self.ec2.create_instances(**create_kwargs)
 
         for instance in instances:
             instance.wait_until_running()
