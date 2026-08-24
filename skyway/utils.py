@@ -6,8 +6,10 @@
 import os
 import time
 from tqdm import tqdm
+import subprocess
 from subprocess import PIPE, Popen
 import yaml
+
 
 def load_config(cfg_name, cfg_path):
     cfg_file = cfg_path + cfg_name + '.yaml'
@@ -51,6 +53,55 @@ def script2cmd(script_name: str):
 def get_username(uid):
     uid = proc("getent passwd " + uid + " | awk -F: '{print $1}'")
     return None if uid==[] else uid[0]
+
+# run a command over ssh
+def run_ssh(host, user, key, remote_cmd, timeout=10):
+    cmd = [
+        "ssh",
+        "-i", key,
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "BatchMode=yes",
+        "-o", f"ConnectTimeout={timeout}",
+        f"{user}@{host}",
+        remote_cmd,
+    ]
+
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+    )
+
+# wait for ssh connection to be ready
+def wait_for_ssh(host, user, key, timeout=300):
+    start = time.time()
+
+    while time.time() - start < timeout:
+        r = run_ssh(host, user, key, "echo READY")
+
+        if r.returncode == 0 and r.stdout.strip() == "READY":
+            return True
+
+        time.sleep(5)
+
+    return False    
+
+# try ssh command until 
+def ssh_until_success(host, user, key, remote_cmd,
+                      retries=60,
+                      interval=5):
+
+    for _ in range(retries):
+        r = run_ssh(host, user, key, remote_cmd)
+
+        if r.returncode == 0:
+            return r
+
+        time.sleep(interval)
+
+    raise RuntimeError(
+        f"Failed to execute '{remote_cmd}' on {host}"
+    )
 
 def sendmail(email_address, to, subject, body):
     mail = "\r\n".join([
