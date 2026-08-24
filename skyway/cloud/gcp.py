@@ -642,7 +642,7 @@ class GCP(Cloud):
                 instance_unit_cost = self.get_unit_price_instance(node)
                 projected_running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
-                end_time = creation_time + running_time
+                end_time = current_time + running_time
                 end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
 
                 # store the record into the database
