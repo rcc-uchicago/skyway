@@ -888,33 +888,19 @@ class AZURE(Cloud):
             state = self.get_instance_status(node)
 
             if state.lower() == "running":
-                # Get the creation time of the instance
-                #creation_time_str = node.extra.get('properties')['timeCreated']  # Azure
-
                 node_user_name = self.get_instance_user_name(node)
                 if user_name != node_user_name:
                     continue
 
-                if creation_time_str:
-                    # Convert the creation time from string to datetime object
-                    # Azure returns 7-digit after '.' for seconds, so need to truncate the last digit 
-                    # to cast into %Y-%m-%dT%H:%M:%S.%f%z format
-                    idx = creation_time_str.find('+')
-                    creation_time_str = creation_time_str[:idx-1] + creation_time_str[idx:]
+                creation_time = node.time_created
+                running_time = current_time - creation_time
 
-                    creation_time = datetime.strptime(creation_time_str, '%Y-%m-%dT%H:%M:%S.%f%z')
-                    
-                    # Calculate the running time
-                    running_time = current_time - creation_time
+                node_type = node.hardware_profile.vm_size
+                instance_unit_cost = self.get_unit_price_instance(node)
+                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
+                total_cost = total_cost + running_cost
 
-                    # get the node type
-                    node_type = node.hardware_profile.vm_size
-
-                    instance_unit_cost = self.get_unit_price_instance(node)
-                    running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
-                    total_cost = total_cost + running_cost
-
-                    nodes.append([node.name, node_type, running_time, running_cost])
+                nodes.append([node.name, node_type, running_time, running_cost])
 
         if verbose == True:
             print(tabulate(nodes, headers=['Name', 'Type', 'Running Time', 'Running Cost']))
