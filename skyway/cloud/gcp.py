@@ -442,6 +442,7 @@ class GCP(Cloud):
                     self.driver.destroy_node(node)
                 except Exception:
                     pass
+                nodes.pop(node_name, None)
             except libcloud.common.google.GoogleBaseError as e:
                 print(f'Google Cloud error occurred: {e}')
             except Exception as e:
@@ -464,12 +465,12 @@ class GCP(Cloud):
 
         """
         #node = self.driver.ex_get_node(node_name)
-        
+
         node = None
-        for node in self.driver.list_nodes():
-            if node.state == "running":
-                if node.id == node_id:
-                    break
+        for n in self.driver.list_nodes():
+            if n.state == "running" and n.id == node_id:
+                node = n
+                break
         if node is not None:
             public_ip = node.public_ips[0]
             username = os.environ['USER']
