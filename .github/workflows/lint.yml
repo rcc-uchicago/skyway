@@ -14,7 +14,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install apache-libcloud boto3 pandas tabulate colorama tqdm pyyaml flake8
+        run: pip install apache-libcloud boto3 google-cloud-tpu pandas tabulate colorama tqdm pyyaml flake8
 
       - name: Install package
         run: pip install -e . --no-deps

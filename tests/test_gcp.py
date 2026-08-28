@@ -57,6 +57,8 @@ class GCPTestCase(unittest.TestCase):
             }
         }
         self.gcp.account_name = 'test-gcp'
+        self.gcp.tpu_client = None
+        self.gcp.project_id = 'test-project'
         self.gcp.my_ssh_private_key = '~/.my_gcp_ssh_key.pem'
         self.gcp.usage_history = f'/tmp/skyway_ci_{os.getpid()}.pkl'
         self.gcp.post_boot_script = ''
