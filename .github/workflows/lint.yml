@@ -20,6 +20,8 @@ jobs:
         run: pip install -e . --no-deps
 
       - name: Check GCP and AWS imports
+        env:
+          SKYWAYROOT: ${{ github.workspace }}
         run: |
           python -c "import skyway"
           python -c "from skyway.cloud.gcp import GCP"
