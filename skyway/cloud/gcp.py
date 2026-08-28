@@ -510,6 +510,7 @@ class GCP(Cloud):
 
         else:
             print(f"Node {node_id} does not exist.")
+            return {}
 
         node_info = {
             'private_key' : "",
