@@ -625,7 +625,8 @@ class GCP(Cloud):
 
                 self.driver.ex_start_node(node)
 
-                self.driver.wait_until_running([node])
+                running = self.driver.wait_until_running([node])
+                node, _ = running[0]
 
                 # creation time is the first time the instance was created
                 creation_time_str = node.extra.get('creationTimestamp')
