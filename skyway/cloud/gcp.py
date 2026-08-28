@@ -16,6 +16,7 @@ import random
 import subprocess
 from tabulate import tabulate
 import time
+import traceback
 
 from .core import Cloud
 from .. import utils
@@ -372,7 +373,8 @@ class GCP(Cloud):
                                                 ex_on_host_maintenance = 'TERMINATE',
                                                 ex_tags = tags,
                                                 ex_metadata = {'ssh-keys': user_name_pub_key },)
-                self.driver.wait_until_running([node])
+                running = self.driver.wait_until_running([node])
+                node, _ = running[0]
 
                 # record node_type, creation time
                 creation_time_str = node.extra.get('creationTimestamp')
@@ -447,6 +449,7 @@ class GCP(Cloud):
                 print(f'Google Cloud error occurred: {e}')
             except Exception as e:
                 print(f"Failed to create {node_name}. Reason: {str(e)}")
+                traceback.print_exc()
         
         return nodes
 
