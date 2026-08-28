@@ -20,4 +20,6 @@ jobs:
         run: pip install -e . --no-deps
 
       - name: Run unit tests
+        env:
+          SKYWAYROOT: ${{ github.workspace }}
         run: pytest tests/ -v
