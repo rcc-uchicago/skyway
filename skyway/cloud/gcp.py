@@ -194,6 +194,11 @@ class GCP(Cloud):
         print(tabulate(node_info, headers=['Name', 'Instance Type', 'CPU Cores', 'Memory (GB)', 'GPU', 'GPU Type', 'Per-hour Cost ($)']))
         print("")
 
+    def get_locations(self, region_prefix="us-"):
+        """Return a sorted list of available zone names filtered by region_prefix."""
+        locations = self.driver.list_locations()
+        return sorted(loc.name for loc in locations if loc.name.startswith(region_prefix))
+
     def get_group_members(self):
         """
         List all the users in this account
@@ -303,141 +308,143 @@ class GCP(Cloud):
 
         print(Fore.BLUE + f"Allocating {count} instance ...", end=" ")
 
-        if location != "":
-           location_name = location
-        else:
-           location_name = self.account['location']
-        print(f"\nLocation: {location_name}\n")
+        preferred_zone = location if location != "" else self.account['location']
+        print(f"\nPreferred zone: {preferred_zone}\n")
 
         vpc_name = self.account.get('vpc_name', 'vpc1')
 
         nodes = {}
         node_cfg = self.vendor['node-types'][node_type]
-        #print(f"node_type = {node_type}: {node_cfg}")
         preemptible = node_cfg['preemptible'] if 'preemptible' in node_cfg else False
 
         scopes = [
             'https://www.googleapis.com/auth/cloud-platform'
         ]
-        
-        networks = self.driver.ex_list_networks() #'vpc1'      # get this from ex_list_networks()
-        network = next((net for net in networks if net.name == vpc_name), None)
 
+        networks = self.driver.ex_list_networks()
+        network = next((net for net in networks if net.name == vpc_name), None)
         subnets = self.driver.ex_list_subnetworks()
-        subnet = next((sub for sub in subnets if sub.name == location_name), None)
 
         if walltime is None or walltime == "":
             walltime_str = "00:30:00"
         else:
             walltime_str = walltime
 
-        # shutdown the instance after the walltime (in minutes)
         pt = datetime.strptime(walltime_str, "%H:%M:%S")
         walltime_in_minutes = int(pt.hour * 60 + pt.minute + pt.second/60)
 
         for node_name in node_names:
             gpu_type = None
-            gpu_count = None           
+            gpu_count = None
             if 'gpu' in node_cfg:
                 gpu_type = node_cfg['gpu-type']
                 gpu_count = node_cfg['gpu']
 
+            # google-cloud-compute changed at some point, making tags empty when query the list of nodes with libcloud
+            tags = [{ 'node_name': node_name, 'user': user_name }]
+            # instead, we add user and node name to labels when creating nodes
+            vm_image = self.account['image_name']
+            if image_id != "":
+                vm_image = image_id
+
+            cmd = f"ssh-keygen -y -f {self.my_ssh_private_key}"
+            p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+            public_key_from_pem = p.stdout.split(' ')[1].strip()
+            user_name_pub_key = f"{user_name}:ssh-rsa {public_key_from_pem}"
+
+            # Phase 1: create node, retrying other US zones on failure
+            node = None
+            used_zone = None
+            zones_to_try = [preferred_zone]
+
+            for zone_idx, zone in enumerate(zones_to_try):
+                subnet = next((sub for sub in subnets if sub.name == zone), None)
+                created_node = None
+                try:
+                    created_node = self.driver.create_node(node_name,
+                                                    size = node_cfg['name'],
+                                                    image = vm_image,
+                                                    location = zone,
+                                                    ex_network=network,
+                                                    ex_subnetwork=subnet,
+                                                    ex_service_accounts=[{
+                                                        'email': self.account['service_account'],
+                                                        'scopes': scopes
+                                                    }],
+                                                    ex_labels={'goog-ec-src': 'vm_add-gcloud', 'node_name': node_name, 'user': user_name},
+                                                    ex_preemptible = preemptible,
+                                                    ex_accelerator_type = gpu_type,
+                                                    ex_accelerator_count = gpu_count,
+                                                    ex_on_host_maintenance = 'TERMINATE',
+                                                    ex_tags = tags,
+                                                    ex_metadata = {'ssh-keys': user_name_pub_key },)
+                    running = self.driver.wait_until_running([created_node])
+                    node, _ = running[0]
+                    used_zone = zone
+                    if zone != preferred_zone:
+                        print(f"  (using fallback zone: {zone})")
+                    break
+                except libcloud.common.google.ResourceNotFoundError as e:
+                    print(f'Zone {zone}: resource not found ({e})')
+                except libcloud.common.google.GoogleBaseError as e:
+                    print(f'Zone {zone}: Google Cloud error ({e})')
+                except Exception as e:
+                    print(f'Zone {zone}: {e}')
+                    traceback.print_exc()
+                finally:
+                    if node is None and created_node is not None:
+                        try:
+                            self.driver.destroy_node(created_node)
+                        except Exception:
+                            pass
+
+                # lazily fetch fallback zones on the first failure
+                if zone_idx == 0 and node is None:
+                    fallbacks = [z for z in self.get_locations() if z != preferred_zone]
+                    zones_to_try.extend(fallbacks)
+                    print(f"  Retrying in other US zones: {', '.join(fallbacks[:5])}{'...' if len(fallbacks) > 5 else ''}")
+
+            if node is None:
+                print(f"Failed to create {node_name} in any available US zone.")
+                continue
+
+            # Phase 2: record, schedule shutdown, post-boot
+            creation_time_str = node.extra.get('creationTimestamp')
+            creation_time = datetime.strptime(creation_time_str, '%Y-%m-%dT%H:%M:%S.%f%z')
+            nodes[node_name] = [node_cfg['name'], creation_time_str, node.public_ips[0]]
+
+            print(f'\n\u2713 Created instance: {node.name} in {used_zone}\n')
+
+            host = node.public_ips[0]
+            user_name = os.environ['USER']
+
+            running_time = timedelta(hours=pt.hour, minutes=pt.minute, seconds=pt.second)
+            instance_unit_cost = self.get_unit_price_instance(node)
+            projected_running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
+            usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
+            end_time = creation_time + running_time
+            end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+
+            data = [user_name, node.id, node.size,
+                    creation_time_str, end_time_str, projected_running_cost, remaining_balance]
+
+            if os.path.isfile(self.usage_history):
+                df = pd.read_pickle(self.usage_history)
+            else:
+                df = pd.DataFrame([], columns=['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
+
+            df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
+            df.to_pickle(self.usage_history)
+
+            print("\u2713 Preparing the instance...")
+            time.sleep(30)
             try:
-                # google-cloud-compute changed at some point, making tags empty when query the list of nodes with libcloud
-                tags = [{ 'node_name': node_name, 'user': user_name }]
-                # instead, we add user and node name to labels when creating nodes
-                vm_image = self.account['image_name']
-                if image_id != "":
-                    vm_image = image_id
-
-                # retrieve the public key from the private key
-                cmd = f"ssh-keygen -y -f {self.my_ssh_private_key}"
-                p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
-                public_key_from_pem = p.stdout.split(' ')[1].strip()
-                user_name_pub_key = f"{user_name}:ssh-rsa {public_key_from_pem}"
-
-                node = self.driver.create_node(node_name,
-                                                size = node_cfg['name'],
-                                                image = vm_image, 
-                                                location = location_name,
-                                                ex_network=network,
-                                                ex_subnetwork=subnet,
-                                                ex_service_accounts=[{
-                                                    'email': self.account['service_account'],
-                                                    'scopes': scopes
-                                                }],
-                                                ex_labels={'goog-ec-src': 'vm_add-gcloud', 'node_name': node_name, 'user': user_name},
-                                                ex_preemptible = preemptible,
-                                                ex_accelerator_type = gpu_type,
-                                                ex_accelerator_count = gpu_count,
-                                                ex_on_host_maintenance = 'TERMINATE',
-                                                ex_tags = tags,
-                                                ex_metadata = {'ssh-keys': user_name_pub_key },)
-                running = self.driver.wait_until_running([node])
-                node, _ = running[0]
-
-                # record node_type, creation time
-                creation_time_str = node.extra.get('creationTimestamp')
-                #print(f"Creation timestamp: {creation_time_str}")
-                creation_time = datetime.strptime(creation_time_str, '%Y-%m-%dT%H:%M:%S.%f%z')
-                node_type = node_cfg['name']
-                nodes[node_name] = [node_type, creation_time_str, node.public_ips[0]]
-
-                print(f'\n\u2713 Created instance: {node.name}\n')
-
-                # ssh to the node and execute a shutdown command scheduled for walltime
-                host = node.public_ips[0]
-                user_name = os.environ['USER']
-                #print("Connecting to host: " + host)
-
-                # record the running time and cost at launch time and expected walltime
-                # then if destroy_nodes() is invoked then updated the end time and cost
-
-                running_time = timedelta(hours=pt.hour, minutes=pt.minute, seconds=pt.second)
-                instance_unit_cost = self.get_unit_price_instance(node)
-                projected_running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
-                usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
-                end_time = creation_time + running_time
-                end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
-
-                # store the record into the database
-                data = [user_name, node.id, node.size,
-                        creation_time_str, end_time_str, projected_running_cost, remaining_balance]
-
-                if os.path.isfile(self.usage_history):
-                    df = pd.read_pickle(self.usage_history)
-                else:
-                    df = pd.DataFrame([], columns=['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
-
-                df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
-                df.to_pickle(self.usage_history)
-
-                print("\u2713 Preparing the instance...")
-                time.sleep(30)
-                #cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{host} 'sudo shutdown -P +{walltime_in_minutes}' "
-                #p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
                 utils.ssh_until_success(
                     host,
                     user_name,
                     self.my_ssh_private_key,
                     f"sudo shutdown -P +{walltime_in_minutes}",
                 )
-
-                # execute the post boot script on the VM
-                # need to install gcsfuse or nfs-utils on the VM (or having an image that has gcsfuse installed) to mount available storage
-                if self.post_boot_script != "":
-                    script_file = os.environ['SKYWAYROOT'] + "/etc/accounts/" + self.post_boot_script
-                    script_cmd = utils.script2cmd(script_file)
-                    cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{host} '{script_cmd}' "
-                    p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
-
-                print("\u2713 To connect to the instance, run:")
-                print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{host} or")
-                print(f"  skyway_connect --account={self.account_name} -J {node.name}")
-                print(f"Instance public IP: {host}") 
-
-            except libcloud.common.google.ResourceNotFoundError as e:
-                print(f'Error: Resource not found. Details: {e}')
             except RuntimeError as e:
                 print(f"SSH setup failed for {node_name}: {str(e)}. Terminating instance to avoid unbounded charges.")
                 try:
@@ -445,12 +452,20 @@ class GCP(Cloud):
                 except Exception:
                     pass
                 nodes.pop(node_name, None)
-            except libcloud.common.google.GoogleBaseError as e:
-                print(f'Google Cloud error occurred: {e}')
-            except Exception as e:
-                print(f"Failed to create {node_name}. Reason: {str(e)}")
                 traceback.print_exc()
-        
+                continue
+
+            if self.post_boot_script != "":
+                script_file = os.environ['SKYWAYROOT'] + "/etc/accounts/" + self.post_boot_script
+                script_cmd = utils.script2cmd(script_file)
+                cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{host} '{script_cmd}' "
+                p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+
+            print("\u2713 To connect to the instance, run:")
+            print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{host} or")
+            print(f"  skyway_connect --account={self.account_name} -J {node.name}")
+            print(f"Instance public IP: {host}")
+
         return nodes
 
     def connect_node(self, node_id, separate_terminal=True):
