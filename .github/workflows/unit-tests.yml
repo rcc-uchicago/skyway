@@ -14,7 +14,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install apache-libcloud pandas tabulate colorama pytest
+        run: pip install apache-libcloud pandas tabulate colorama tqdm pyyaml pytest
 
       - name: Install package
         run: pip install -e . --no-deps
