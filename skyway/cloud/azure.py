@@ -14,6 +14,7 @@ import random
 import subprocess
 from tabulate import tabulate
 import time
+import traceback
 
 from .core import Cloud
 from .. import utils
@@ -342,9 +343,23 @@ class AZURE(Cloud):
                 public_ip = public_ip_address.ip_address
 
                 print("\u2713 Preparing the instance...")
-                cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{public_ip} 'sudo shutdown -P +{walltime_in_minutes}' "
                 time.sleep(30)
-                subprocess.run(cmd, shell=True, text=True, capture_output=True)
+                try:
+                    utils.ssh_until_success(
+                        public_ip,
+                        user_name,
+                        self.my_ssh_private_key,
+                        f"sudo shutdown -P +{walltime_in_minutes}",
+                    )
+                except RuntimeError as e:
+                    print(f"SSH setup failed for {node_name}: {str(e)}. Terminating instance to avoid unbounded charges.")
+                    try:
+                        compute_client.virtual_machines.begin_delete(resource_group_name, node_name).result()
+                    except Exception:
+                        pass
+                    nodes.pop(node_name, None)
+                    traceback.print_exc()
+                    continue
 
                 print(f"Instance public IP: {public_ip}")
 

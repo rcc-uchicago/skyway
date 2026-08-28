@@ -15,6 +15,7 @@ import random
 import subprocess
 from tabulate import tabulate
 import time
+import traceback
 
 from .core import Cloud
 from .. import utils
@@ -266,11 +267,24 @@ class OCI(Cloud):
         df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
         df.to_pickle(self.usage_history)
         
-        cmd = f"  ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@{public_ip} "
-        cmd += f" 'sudo shutdown -P +{walltime_in_minutes}' "
         print("\u2713 Preparing the instance...")
         time.sleep(30)
-        p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+        try:
+            utils.ssh_until_success(
+                public_ip,
+                username,
+                self.my_ssh_private_key,
+                f"sudo shutdown -P +{walltime_in_minutes}",
+            )
+        except RuntimeError as e:
+            print(f"SSH setup failed for {instance.display_name}: {str(e)}. Terminating instance to avoid unbounded charges.")
+            try:
+                self.compute_client.terminate_instance(instance.id)
+            except Exception:
+                pass
+            nodes.pop(node_names[0], None)
+            traceback.print_exc()
+            return nodes
 
         print(f"\u2713 To connect to the instance, run:")
         cmd = f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@{public_ip} or"

@@ -14,6 +14,7 @@ import os
 import random
 import subprocess
 from tabulate import tabulate
+import traceback
 
 from .core import Cloud
 from .. import utils
@@ -288,9 +289,22 @@ class AWS(Cloud):
             
             print("\u2713 Preparing the instance...")
             time.sleep(30)
-            cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com "
-            cmd += f" 'sudo shutdown -P +{walltime_in_minutes}' "
-            p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+            try:
+                utils.ssh_until_success(
+                    f"ec2-{ip_converted}.{region}.compute.amazonaws.com",
+                    username,
+                    self.my_ssh_private_key,
+                    f"sudo shutdown -P +{walltime_in_minutes}",
+                )
+            except RuntimeError as e:
+                print(f"SSH setup failed for {node_names[inode]}: {str(e)}. Terminating instance to avoid unbounded charges.")
+                try:
+                    instance.terminate()
+                except Exception:
+                    pass
+                nodes.pop(node_names[inode], None)
+                traceback.print_exc()
+                continue
 
             print("\u2713 To connect to the instance, run:")
             print(f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com or ")
