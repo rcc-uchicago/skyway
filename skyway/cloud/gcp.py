@@ -244,10 +244,12 @@ class GCP(Cloud):
         node = tpu_v2.Node()
         node.accelerator_type = node_cfg['tpu-type']
         node.runtime_version = node_cfg['tpu-runtime']
-        vpc_name = self.account.get('vpc_name', 'default')
+        vpc_name = self.account.get('vpc_name', 'vpc1')
+        region = '-'.join(zone.split('-')[:-1])  # e.g. us-central1-f -> us-central1
         network_config = tpu_v2.NetworkConfig()
         network_config.enable_external_ips = True
         network_config.network = f"projects/{self.project_id}/global/networks/{vpc_name}"
+        network_config.subnetwork = f"projects/{self.project_id}/regions/{region}/subnetworks/{vpc_name}"
         node.network_config = network_config
         node.metadata = {'ssh-keys': ssh_key_metadata}
         node.labels = {'user': user_name, 'node_name': node_name}
