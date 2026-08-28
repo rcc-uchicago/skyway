@@ -110,7 +110,7 @@ class OCI(Cloud):
                 if instance.lifecycle_state == "running":
                     running_time = datetime.now(timezone.utc) - instance.time_created
                 else:
-                    df_node = df.loc[df['InstanceID'] == node.id]
+                    df_node = df.loc[df['InstanceID'] == instance.id]
                     end_time = pd.to_datetime(df_node['End'].iloc[0], format='%Y-%m-%dT%H:%M:%S.%f%z')
                     running_time = end_time - instance.launch_time
 
