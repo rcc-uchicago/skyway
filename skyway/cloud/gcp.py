@@ -528,8 +528,16 @@ class GCP(Cloud):
                 except libcloud.common.google.GoogleBaseError as e:
                     print(f'Zone {zone}: Google Cloud error ({e})')
                 except Exception as e:
-                    print(f'Zone {zone}: {e}')
-                    traceback.print_exc()
+                    try:
+                        from google.api_core import exceptions as gapi_exc
+                        if isinstance(e, gapi_exc.GoogleAPICallError):
+                            print(f'Zone {zone}: {e.message}')
+                        else:
+                            print(f'Zone {zone}: {e}')
+                            traceback.print_exc()
+                    except ImportError:
+                        print(f'Zone {zone}: {e}')
+                        traceback.print_exc()
                 finally:
                     if node_obj is None:
                         if created_tpu is not None:
