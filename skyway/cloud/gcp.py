@@ -531,7 +531,8 @@ class GCP(Cloud):
                     try:
                         from google.api_core import exceptions as gapi_exc
                         if isinstance(e, gapi_exc.GoogleAPICallError):
-                            print(f'Zone {zone}: {e.message}')
+                            instance_type = node_cfg.get('tpu-type') if _is_tpu else node_cfg.get('name', node_type)
+                            print(f'Zone {zone}: {instance_type} is not available, searching next zone ...')
                         else:
                             print(f'Zone {zone}: {e}')
                             traceback.print_exc()
