@@ -25,6 +25,7 @@ import time
 
 # AWS python SDK
 import boto3
+import botocore.exceptions
 
 # It is also possible to use libcloud EC2NodeDriver
 from libcloud.compute.types import Provider
@@ -225,13 +226,41 @@ class AWS(Cloud):
                 },
 
             ])
-        if location:
-            create_kwargs['Placement'] = {'AvailabilityZone': location}
-        instances = self.ec2.create_instances(**create_kwargs)
+        preferred_zone = location if location else None
+        zones_to_try = [preferred_zone] if preferred_zone else [None]
+        instance_type_name = self.vendor['node-types'][node_type]['name']
 
-        for instance in instances:
-            instance.wait_until_running()
-        
+        instances = None
+        for zone_idx, zone in enumerate(zones_to_try):
+            attempt_kwargs = dict(**create_kwargs)
+            if zone:
+                attempt_kwargs['Placement'] = {'AvailabilityZone': zone}
+            try:
+                instances = self.ec2.create_instances(**attempt_kwargs)
+                for instance in instances:
+                    instance.wait_until_running()
+                if zone and zone != preferred_zone:
+                    print(f"  (using fallback zone: {zone})")
+                break
+            except botocore.exceptions.ClientError as e:
+                code = e.response['Error']['Code']
+                if code in ('InsufficientInstanceCapacity', 'Unsupported'):
+                    print(f'- Zone {zone or "auto"}: {instance_type_name} is not available.')
+                    if len(zones_to_try) == 1:
+                        all_azs = [az['ZoneName'] for az in
+                                   self.ec2.meta.client.describe_availability_zones(
+                                       Filters=[{'Name': 'state', 'Values': ['available']}]
+                                   )['AvailabilityZones']]
+                        fallbacks = [z for z in all_azs if z != zone]
+                        zones_to_try.extend(fallbacks)
+                        print(f"  Retry in other zones:")
+                else:
+                    raise
+
+        if instances is None:
+            print(f"Failed to create {node_name} in any available zone.")
+            return {}
+
         nodes = {}
         # .pem file is the private key of the local machine that has a correponding public key listed
         # as in ~/.ssh/authorized_keys on the node

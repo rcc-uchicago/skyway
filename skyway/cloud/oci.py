@@ -192,35 +192,54 @@ class OCI(Cloud):
             self.identity_client.list_availability_domains,
             self.account['compartment_id']
         )
-        availability_domain = list_availability_domains_response.data[0]
-        print(f"\nLocation: {availability_domain}\n")
+        all_ads = list_availability_domains_response.data
+
+        if location:
+            preferred_ad = next((ad for ad in all_ads if ad.name == location), all_ads[0])
+            ads_to_try = [preferred_ad] + [ad for ad in all_ads if ad.name != preferred_ad.name]
+        else:
+            ads_to_try = all_ads
 
         vm_image = self.account['image_id']
         if image_id != "":
             vm_image = image_id
 
-        instance_details = oci.core.models.LaunchInstanceDetails(
-            compartment_id = self.account['compartment_id'],
-            availability_domain = availability_domain.name,
-            shape = self.vendor['node-types'][node_type]['name'],
-            shape_config = oci.core.models.LaunchInstanceShapeConfigDetails(ocpus=1, memory_in_gbs=8),
-            display_name = node_name,
-            create_vnic_details = vnic_details,
-            image_id = vm_image,
-            metadata = {
-                'ssh_authorized_keys': ssh_pub_key,
-                'Name': node_name,
-                'User': user_name,
-                'node_type': self.vendor['node-types'][node_type]['name'],
-            }
-        )
+        instance_type_name = self.vendor['node-types'][node_type]['name']
+        instance = None
+        for ad_idx, availability_domain in enumerate(ads_to_try):
+            print(f"\nLocation: {availability_domain.name}\n")
+            instance_details = oci.core.models.LaunchInstanceDetails(
+                compartment_id = self.account['compartment_id'],
+                availability_domain = availability_domain.name,
+                shape = instance_type_name,
+                shape_config = oci.core.models.LaunchInstanceShapeConfigDetails(ocpus=1, memory_in_gbs=8),
+                display_name = node_name,
+                create_vnic_details = vnic_details,
+                image_id = vm_image,
+                metadata = {
+                    'ssh_authorized_keys': ssh_pub_key,
+                    'Name': node_name,
+                    'User': user_name,
+                    'node_type': instance_type_name,
+                }
+            )
+            try:
+                launch_instance_response = self.compute_client_composite_operations.launch_instance_and_wait_for_state(
+                    instance_details,
+                    wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_RUNNING]
+                )
+                instance = launch_instance_response.data
+                if ad_idx > 0:
+                    print(f"  (using fallback AD: {availability_domain.name})")
+                break
+            except oci.exceptions.ServiceError as e:
+                print(f'- AD {availability_domain.name}: {instance_type_name} is not available.')
+                if ad_idx == 0 and len(ads_to_try) > 1:
+                    print(f"  Retry in other availability domains:")
 
-        # Launch the instance
-        launch_instance_response = self.compute_client_composite_operations.launch_instance_and_wait_for_state(
-            instance_details,
-            wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_RUNNING]
-        )
-        instance = launch_instance_response.data
+        if instance is None:
+            print(f"Failed to create {node_name} in any available AD.")
+            return {}
 
         nodes = {}
         # .pem file is the private key of the local machine that has a correponding public key listed
