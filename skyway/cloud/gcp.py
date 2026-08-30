@@ -495,6 +495,7 @@ class GCP(Cloud):
                         creation_time_str = created_tpu.create_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
                     else:
                         subnet = next((sub for sub in subnets if sub.name == zone), None)
+                        boot_disk_type = node_cfg.get('boot_disk_type', 'pd-standard')
                         created_node = self.driver.create_node(node_name,
                                                         size=node_cfg['name'],
                                                         image=vm_image,
@@ -511,7 +512,8 @@ class GCP(Cloud):
                                                         ex_accelerator_count=gpu_count,
                                                         ex_on_host_maintenance='TERMINATE',
                                                         ex_tags=tags,
-                                                        ex_metadata={'ssh-keys': user_name_pub_key})
+                                                        ex_metadata={'ssh-keys': user_name_pub_key},
+                                                        ex_disk_type=boot_disk_type)
                         running = self.driver.wait_until_running([created_node])
                         node_obj, _ = running[0]
                         node_id = node_obj.id
