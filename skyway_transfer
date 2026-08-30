@@ -78,14 +78,14 @@ class InstanceDescriptor:
             if from_cloud == True:
                 # copy from cloud
                 print(f"copy from cloud {remote}:{cloud_path} to {local_data[0]}")
-                cmd = f"scp -rC -i {private_key} -o StrictHostKeyChecking=accept-new {remote}:{cloud_path} {local_data[0]}"
+                cmd = f"scp -rC -i {private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {remote}:{cloud_path} {local_data[0]}"
                 
             else:
                 # copy to cloud
                 if cloud_path == "":
-                    cmd = f"scp -rC -i {private_key} -o StrictHostKeyChecking=accept-new {local} {remote}:~/"
+                    cmd = f"scp -rC -i {private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {local} {remote}:~/"
                 else:
-                    cmd = f"scp -rC -i {private_key} -o StrictHostKeyChecking=accept-new {local} {remote}:/{cloud_path}"
+                    cmd = f"scp -rC -i {private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {local} {remote}:/{cloud_path}"
                
             print(f"Executing: {cmd}")
             os.system(cmd)
@@ -105,14 +105,14 @@ class InstanceDescriptor:
                 if from_cloud == True:
                     # copy from cloud
                     print(f"copy from cloud {remote}:{cloud_path} to {local_data[0]}")
-                    cmd = f"scp -rC -i {private_key} -o StrictHostKeyChecking=accept-new {remote}:{cloud_path} {local_data[0]}"
+                    cmd = f"scp -rC -i {private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {remote}:{cloud_path} {local_data[0]}"
                 
                 else:
                     # copy to cloud
                     if cloud_path == "":
-                        cmd = f"scp -rC -i {private_key} -o StrictHostKeyChecking=accept-new {local} {remote}:~/"
+                        cmd = f"scp -rC -i {private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {local} {remote}:~/"
                     else:
-                        cmd = f"scp -rC -i {private_key} -o StrictHostKeyChecking=accept-new {local} {remote}:/{cloud_path}"
+                        cmd = f"scp -rC -i {private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {local} {remote}:/{cloud_path}"
                     
                 os.system(cmd)
 

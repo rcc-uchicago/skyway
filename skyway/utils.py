@@ -59,7 +59,8 @@ def run_ssh(host, user, key, remote_cmd, timeout=10):
     cmd = [
         "ssh",
         "-i", key,
-        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
         "-o", "BatchMode=yes",
         "-o", f"ConnectTimeout={timeout}",
         f"{user}@{host}",

@@ -618,11 +618,11 @@ class GCP(Cloud):
             if self.post_boot_script != "":
                 script_file = os.environ['SKYWAYROOT'] + "/etc/accounts/" + self.post_boot_script
                 script_cmd = utils.script2cmd(script_file)
-                cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{host} '{script_cmd}' "
+                cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host} '{script_cmd}' "
                 p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
 
             print("✓ To connect to the instance, run:")
-            print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{host} or")
+            print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host} or")
             print(f"  skyway_connect --account={self.account_name} -J {node_name}")
             print(f"Instance public IP: {host}")
 
@@ -656,15 +656,15 @@ class GCP(Cloud):
 
             # set up SSH tunneling to the localhost
             port=random.randint(15000, 30000)
-            cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new -f -N -L {port}:localhost:{port} {username}@{public_ip}"
+            cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -f -N -L {port}:localhost:{port} {username}@{public_ip}"
             print(f"SSH tunneling to the VM using port = {port}")
             os.system(cmd)
 
             if separate_terminal == True:
                 cmd = "gnome-terminal -q --title='Connecting to the node' -- bash -c "
-                cmd += f" 'module purge; ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@{public_ip}; exec bash' "
+                cmd += f" 'module purge; ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@{public_ip}; exec bash' "
             else:
-                cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@{public_ip}"
+                cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@{public_ip}"
 
             os.system(cmd)
 
@@ -852,12 +852,12 @@ class GCP(Cloud):
                 if self.post_boot_script != "":
                     script_file = os.environ['SKYWAYROOT'] + "/etc/accounts/" + self.post_boot_script
                     script_cmd = utils.script2cmd(script_file)
-                    cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{host} '{script_cmd}' "
+                    cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host} '{script_cmd}' "
                     p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
 
                 print(f'\nInstance {node.name} is up.')
                 print("To connect to the instance, run:")
-                print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{node.public_ips[0]} or")
+                print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{node.public_ips[0]} or")
                 print(f"  skyway_connect --account={self.account_name} -J {node.name}")
 
                 running_time = timedelta(hours=pt.hour, minutes=pt.minute, seconds=pt.second)
@@ -922,11 +922,11 @@ class GCP(Cloud):
                 if self.post_boot_script != "":
                     script_file = os.environ['SKYWAYROOT'] + "/etc/accounts/" + self.post_boot_script
                     script_cmd = utils.script2cmd(script_file)
-                    cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{host} '{script_cmd}' "
+                    cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host} '{script_cmd}' "
                     p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
                 print(f'\nTPU VM {short_name} is up.')
                 print("To connect to the instance, run:")
-                print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{host}")
+                print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host}")
                 running_time = timedelta(hours=pt.hour, minutes=pt.minute, seconds=pt.second)
                 projected_running_cost = running_time.total_seconds() / 3600.0 * unit_price
                 usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
@@ -979,7 +979,7 @@ class GCP(Cloud):
                 command += value + " "
 
             cmd = "gnome-terminal --title='Connecting to the node' -- bash -c "
-            cmd += f" 'ssh -o StrictHostKeyChecking=accept-new {user_name}@{host}' -t '{command}' "
+            cmd += f" 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host}' -t '{command}' "
 
             os.system(cmd)
         else:
@@ -999,7 +999,7 @@ class GCP(Cloud):
             user_name = os.environ['USER']
             script_cmd = utils.script2cmd(script_name)
 
-            cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{host} '{script_cmd}' "
+            cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host} '{script_cmd}' "
             os.system(cmd)
         else:
             print(f"Node {node_id} does not exist.")
