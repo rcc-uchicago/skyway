@@ -115,7 +115,7 @@ if __name__ == "__main__":
 
     if job_name == "" and instance_id == "":
         print(f"Need a job name or an instance id to proceed")
-        quit
+        sys.exit(1)
 
     # create an instance descriptor (like with the dashboard)
     instanceDescriptor = InstanceDescriptor(job_name, account_name, vendor_name)

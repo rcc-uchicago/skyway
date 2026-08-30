@@ -119,6 +119,24 @@ class InstanceDescriptor:
             else:
                 print(f"Failed to get connection info for instance {instanceID}")
 
+        elif "azure" in self.vendor_name:
+            instanceID = self.account.get_instance_ID(self.jobname)
+            if instanceID == '':
+                raise Exception(f'Cannot find a valid instance ID for {self.jobname}. Check the running VMs of this cloud account with the skyway list command.')
+            node_info = self.account.get_node_connection_info(instanceID)
+            private_key = self.account.get_private_key()
+            remote = node_info['login']
+            local = ' '.join(local_data)
+            if from_cloud:
+                cmd = f"scp -rC -i {private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {remote}:{cloud_path} {local_data[0]}"
+            else:
+                if cloud_path == "":
+                    cmd = f"scp -rC -i {private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {local} {remote}:~/"
+                else:
+                    cmd = f"scp -rC -i {private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {local} {remote}:/{cloud_path}"
+            print(f"Executing: {cmd}")
+            os.system(cmd)
+
 
 if __name__ == "__main__":
 

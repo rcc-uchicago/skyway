@@ -430,7 +430,7 @@ class AZURE(Cloud):
 
         # set up SSH tunneling to the localhost
         port=random.randint(15000, 30000)
-        cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -f -N -L {port}:localhost:{public_ip} {user_name}@{public_ip}"
+        cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -f -N -L {port}:localhost:{port} {user_name}@{public_ip}"
         print(f"SSH tunneling to the VM using port = {port}")
         os.system(cmd)
 
@@ -443,6 +443,47 @@ class AZURE(Cloud):
         os.system(cmd)
 
         return node_info
+
+    def execute_script(self, instance_ID: str, script_name: str):
+        compute_client = ComputeManagementClient(self.credentials, self.account['subscription_id'])
+        vm = None
+        for instance in compute_client.virtual_machines.list_all():
+            if instance.vm_id == instance_ID:
+                vm = instance
+                break
+        if vm is None:
+            print(f"Node {instance_ID} does not exist.")
+            return
+        host = self.get_host_ip(vm.name)
+        user_name = os.environ['USER']
+        script_cmd = utils.script2cmd(script_name)
+        cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host} '{script_cmd}' "
+        os.system(cmd)
+
+    def stop_nodes(self, IDs=[], node_names=[], need_confirmation=True):
+        compute_client = ComputeManagementClient(self.credentials, self.account['subscription_id'])
+        resource_group_name = self.account['resource_group']
+        user_name = os.environ['USER']
+        if need_confirmation:
+            response = input(f"Do you want to stop (deallocate) {node_names or IDs}? (y/n) ")
+            if response != 'y':
+                return
+        for vm_name in node_names:
+            print(f"Stopping VM: {vm_name}")
+            compute_client.virtual_machines.begin_deallocate(resource_group_name, vm_name).result()
+            print(f"  VM {vm_name} stopped.")
+
+    def restart_nodes(self, IDs=[], node_names=[], need_confirmation=True, walltime=None):
+        compute_client = ComputeManagementClient(self.credentials, self.account['subscription_id'])
+        resource_group_name = self.account['resource_group']
+        if need_confirmation:
+            response = input(f"Do you want to restart {node_names or IDs}? (y/n) ")
+            if response != 'y':
+                return
+        for vm_name in node_names:
+            print(f"Starting VM: {vm_name}")
+            compute_client.virtual_machines.begin_start(resource_group_name, vm_name).result()
+            print(f"  VM {vm_name} started.")
 
     def get_node_connection_info(self, instance_ID):
         compute_client = ComputeManagementClient(self.credentials, self.account['subscription_id'])

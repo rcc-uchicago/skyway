@@ -36,6 +36,8 @@ class InstanceDescriptor:
             self.account = GCP(account_name)
         elif 'azure' in vendor_name:
             self.account = AZURE(account_name)
+        elif 'oci' in vendor_name:
+            self.account = OCI(account_name)
         elif 'midway3' in vendor_name:
             self.account = SLURMCluster(account_name)
 
@@ -131,7 +133,7 @@ def parse_script(filename):
                 line = line.replace(' ','')
                 args = line.split('=')
                 if len(args) == 2:
-                    if args[0] == "-job-name":
+                    if args[0] == "--job-name":
                         jobname = args[1]
                     if args[0] == "--account":
                         account = args[1]

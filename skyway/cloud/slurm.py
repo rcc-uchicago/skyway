@@ -251,7 +251,7 @@ class SLURMCluster(Cloud):
         return nodes, output_str
 
 
-    def create_nodes(self, node_type: str, node_names = [], interactive = False, need_confirmation = True, walltime = None, image_id = ""):
+    def create_nodes(self, node_type: str, node_names = [], interactive = False, need_confirmation = True, walltime = None, image_id = "", location = ""):
         '''
         create several nodes (aka instances) given a list of node names using salloc
         for SLURM it is a wrapper of salloc
@@ -321,6 +321,12 @@ class SLURMCluster(Cloud):
             'login' : f"{node_name}",
         }
         return node_info
+
+    def stop_nodes(self, IDs=[], node_names=[], need_confirmation=True):
+        print("stop_nodes is not supported for Slurm/on-premises clusters.")
+
+    def restart_nodes(self, IDs=[], node_names=[], need_confirmation=True, walltime=None):
+        print("restart_nodes is not supported for Slurm/on-premises clusters.")
 
     def destroy_nodes(self, IDs = [], need_confirmation=True):
         '''

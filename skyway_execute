@@ -4,6 +4,7 @@ import argparse
 from datetime import datetime, timezone
 from io import StringIO
 import os
+import sys
 import subprocess
 from subprocess import PIPE, Popen
 
@@ -12,6 +13,7 @@ from skyway.cloud.aws import *
 from skyway.cloud.gcp import *
 from skyway.cloud.azure import *
 from skyway.cloud.slurm import *
+from skyway.cloud.oci import *
 
 import colorama
 from colorama import Fore
@@ -34,13 +36,15 @@ class InstanceDescriptor:
             self.account = GCP(account_name)
         elif 'azure' in vendor_name:
             self.account = AZURE(account_name)
+        elif 'oci' in vendor_name:
+            self.account = OCI(account_name)
         elif 'midway3' in vendor_name:
             self.account = SLURMCluster(account_name)
 
         self.user = os.environ['USER']
 
     def execute(self, script_name=None):
-       
+
         # execute the commands listed in the script on the compute node
         if script_name is not None:
             if "midway3" in self.vendor_name:
@@ -55,7 +59,15 @@ class InstanceDescriptor:
             elif "gcp" in self.vendor_name:
                 instanceID = self.account.get_instance_ID(self.jobname)
                 self.account.execute_script(instanceID, script_name)
-  
+
+            elif "oci" in self.vendor_name:
+                instanceID = self.account.get_instance_ID(self.jobname)
+                self.account.execute_script(instanceID, script_name)
+
+            elif "azure" in self.vendor_name:
+                instanceID = self.account.get_instance_ID(self.jobname)
+                self.account.execute_script(instanceID, script_name)
+
 
 '''
    parse the job script to get the account information, node type (constraint) and walltime
@@ -65,7 +77,7 @@ def parse_script(filename):
     account = ""
     constraint = ""
     walltime = ""
-    skyway_cmd = ""
+    skyway_cmds = []
     with open(filename, 'r') as f:
         lines = f.readlines()
         for line in lines:
@@ -78,16 +90,16 @@ def parse_script(filename):
                 line = line.replace(' ','')
                 args = line.split('=')
                 if len(args) == 2:
-                    if args[0] == "-job-name":
+                    if args[0] == "--job-name":
                         jobname = args[1]
                     if args[0] == "--account":
                         account = args[1]
                     if args[0] == "--constraint":
                         constraint = args[1]
                     if args[0] == "--time":
-                        walltime = args[1]                        
+                        walltime = args[1]
             elif "skyway_" in line:
-                skyway_cmd = line.strip('\n')
+                skyway_cmds.append(line.strip('\n'))
             else:
                 continue
 
@@ -95,11 +107,11 @@ def parse_script(filename):
              'account': account,
              'constraint': constraint,
              'walltime': walltime,
-             'skyway_cmd': skyway_cmd
+             'skyway_cmd': skyway_cmds
             }
 
 if __name__ == "__main__":
-   
+
     colorama.init(autoreset=True)
 
     msg = "Skyway execute commands on a running VM of a cloud account"
@@ -115,6 +127,9 @@ if __name__ == "__main__":
     provider = args.provider.lower()
     script = args.script[0]
 
+    args = parse_script(script)
+    skyway_cmds = args['skyway_cmd']
+
     if provider == "":
         # try to infer the vendor name from account
         if 'aws' in account_name:
@@ -127,25 +142,9 @@ if __name__ == "__main__":
             vendor_name = "oci"
         elif 'midway3' in account_name or 'rcc-staff' in account_name:
             vendor_name = "rcc-midway3"
-    else:
-        vendor_name = provider
-
-    args = parse_script(script)
-    skyway_cmd = args['skyway_cmd']
-
-    if provider == "":
-        # try to infer the vendor name from account
-        if 'aws' in account_name:
-            vendor_name = "aws"
-        elif 'gcp' in account_name:
-            vendor_name = "gcp"
-        elif 'azure' in account_name:
-            vendor_name = "azure"
-        elif 'midway3' in account_name or 'rcc-staff' in account_name:
-            vendor_name = "rcc-midway3"
         else:
             print(f"account name {account_name} is not valid")
-            quit
+            sys.exit(1)
     else:
         vendor_name = provider
 
@@ -158,10 +157,9 @@ if __name__ == "__main__":
     instanceDescriptor = InstanceDescriptor(job_name, account_name, "", "", vendor_name)
 
     # execute pre-launch commands: e.g. data transfers
-    if skyway_cmd != "":
-        # append the command with account and job name
-        skyway_cmd += " --account=" + account_name + " -J" + job_name
-        os.system(skyway_cmd)
+    for cmd in skyway_cmds:
+        cmd += " --account=" + account_name + " -J" + job_name
+        os.system(cmd)
 
-    # submit job
+    # execute script on the running VM
     instanceDescriptor.execute(script_name=script)
