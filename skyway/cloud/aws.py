@@ -336,7 +336,7 @@ class AWS(Cloud):
                 continue
 
             print("\u2713 To connect to the instance, run:")
-            print(f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com or ")
+            print(f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com or ")
             print(f"  skyway_connect --account={self.account_name} -J {node_names[inode]}")
             print(f"Instance public IP: {ip}")
 
@@ -347,11 +347,11 @@ class AWS(Cloud):
             if self.post_boot_script != "":
                 script_file = os.environ['SKYWAYROOT'] + "/etc/accounts/" + self.post_boot_script
                 script_cmd = utils.script2cmd(script_file)
-                cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com '{script_cmd}' "
+                cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com '{script_cmd}' "
                 p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
 
             #  mount the storage attached to the io_node (optional)
-            cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com "
+            cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com "
             cmd += f" 'sudo mkdir -p /cloud/rcc-aws; sudo mount -t nfs {io_server}:/cloud/rcc-aws /cloud/rcc-aws' "
             p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
 
@@ -374,15 +374,15 @@ class AWS(Cloud):
 
         # set up SSH tunneling to the localhost
         port=random.randint(15000, 30000)
-        cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new -f -N -L {port}:localhost:{port} {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com"
+        cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -f -N -L {port}:localhost:{port} {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com"
         print(f"SSH tunneling to the VM using port = {port}")
         os.system(cmd)
 
         if separate_terminal == True:
             cmd = "gnome-terminal -q --title='Connecting to the node' -- bash -c "
-            cmd += f" 'module purge; ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com; exec bash' "
+            cmd += f" 'module purge; ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com; exec bash' "
         else:
-            cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com"
+            cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com"
 
         os.system(cmd)
 
@@ -423,7 +423,7 @@ class AWS(Cloud):
             command += value + " "
 
         cmd = "gnome-terminal -q --title='Connecting to the node' -- bash -c "
-        cmd += f" 'ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com' -t '{command}' "
+        cmd += f" 'ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com' -t '{command}' "
         p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
 
 
@@ -440,7 +440,7 @@ class AWS(Cloud):
         ip_converted = ip.replace('.','-')
 
         script_cmd = utils.script2cmd(script_name)
-        cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com -t 'eval {script_cmd}' "
+        cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com -t 'eval {script_cmd}' "
         p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
 
 
@@ -650,12 +650,12 @@ class AWS(Cloud):
 
                 # make sure to shutdown the instance after the walltime (in minutes)
                 host = instance.public_ip_address
-                cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{host} 'sudo shutdown -P +{walltime_in_minutes}' "
+                cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host} 'sudo shutdown -P +{walltime_in_minutes}' "
                 p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
 
                 print(f'\nInstance {node_name} is up.')
                 print("To connect to the instance, run:")
-                print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{host} or")
+                print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host} or")
                 print(f"  skyway_connect --account={self.account_name} -J {instance_name}")
 
     def check_valid_user(self, user_name, verbose=False):

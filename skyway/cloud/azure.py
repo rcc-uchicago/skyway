@@ -368,7 +368,7 @@ class AZURE(Cloud):
                 if self.post_boot_script != "":
                     script_file = os.environ['SKYWAYROOT'] + "/etc/accounts/" + self.post_boot_script
                     script_cmd = utils.script2cmd(script_file)
-                    cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{public_ip} '{script_cmd}' "
+                    cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{public_ip} '{script_cmd}' "
                     p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
 
         return nodes
@@ -401,7 +401,7 @@ class AZURE(Cloud):
         user_name = os.environ['USER']
 
         cmd = "gnome-terminal -q --title='Connecting to the node' -- bash -c "
-        cmd += f" 'ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{host}' -t '{command}' "
+        cmd += f" 'ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host}' -t '{command}' "
         subprocess.run(cmd, shell=True, text=True, capture_output=True)
         
 
@@ -430,15 +430,15 @@ class AZURE(Cloud):
 
         # set up SSH tunneling to the localhost
         port=random.randint(15000, 30000)
-        cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new -f -N -L {port}:localhost:{public_ip} {user_name}@{public_ip}"
+        cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -f -N -L {port}:localhost:{public_ip} {user_name}@{public_ip}"
         print(f"SSH tunneling to the VM using port = {port}")
         os.system(cmd)
 
         if separate_terminal == True:
             cmd = "gnome-terminal --title='Connecting to the node' -- bash -c "
-            cmd += f" 'ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{public_ip}; exec bash' "
+            cmd += f" 'ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{public_ip}; exec bash' "
         else:
-            cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{public_ip}"
+            cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{public_ip}"
 
         os.system(cmd)
 

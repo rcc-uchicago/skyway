@@ -306,7 +306,7 @@ class OCI(Cloud):
             return nodes
 
         print(f"\u2713 To connect to the instance, run:")
-        cmd = f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@{public_ip} or"
+        cmd = f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@{public_ip} or"
         print(f"  skyway_connect --account={self.account_name} -J {instance.display_name}")
         print(f"{cmd}")
         print(f"Instance public IP: {public_ip}")       
@@ -316,7 +316,7 @@ class OCI(Cloud):
         if self.post_boot_script != "":
             script_file = os.environ['SKYWAYROOT'] + "/etc/accounts/" + self.post_boot_script
             script_cmd = utils.script2cmd(script_file)
-            cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{public_ip} '{script_cmd}' "
+            cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{public_ip} '{script_cmd}' "
             p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
 
         return nodes
@@ -344,15 +344,15 @@ class OCI(Cloud):
 
         # set up SSH tunneling to the localhost
         port=random.randint(15000, 30000)
-        cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new -f -N -L {port}:localhost:{port} {username}@{public_ip}"
+        cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -f -N -L {port}:localhost:{port} {username}@{public_ip}"
         print(f"port = {port}")
         os.system(cmd)
 
         if separate_terminal == True:
             cmd = "gnome-terminal -q --title='Connecting to the node' -- bash -c "
-            cmd += f" 'module purge; ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@{public_ip}; exec bash' "
+            cmd += f" 'module purge; ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@{public_ip}; exec bash' "
         else:
-            cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@{public_ip}"
+            cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@{public_ip}"
         #p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
         os.system(cmd)
 
@@ -387,7 +387,7 @@ class OCI(Cloud):
         for key, value in kwargs.items():
             command += value + " "
 
-        cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@{ip}' -t '{command}'"
+        cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@{ip}' -t '{command}'"
         p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
 
 
@@ -404,7 +404,7 @@ class OCI(Cloud):
         ip_converted = ip.replace('.','-')
 
         script_cmd = utils.script2cmd(script_name)
-        cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {username}@{ip} -t 'eval {script_cmd}' "
+        cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@{ip} -t 'eval {script_cmd}' "
         p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
 
 
@@ -634,12 +634,12 @@ class OCI(Cloud):
 
                 # make sure to shutdown the instance after the walltime (in minutes)
                 public_ip_address = self.get_host_ip(instance.id)
-                cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{public_ip_address} 'sudo shutdown -P +{walltime_in_minutes}' "
+                cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{public_ip_address} 'sudo shutdown -P +{walltime_in_minutes}' "
                 p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
 
                 print(f'\nInstance {instance.name} is up.')
                 print("To connect to the instance, run:")
-                print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=accept-new {user_name}@{public_ip_address} or")
+                print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{public_ip_address} or")
                 print(f"  skyway_connect --account={self.account_name} -J {instance.display_name}")
 
                 # record the running time and cost
