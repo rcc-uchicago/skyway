@@ -42,15 +42,14 @@ class InstanceDescriptor:
 
         self.user = os.environ['USER']
 
-    def submitJob(self, script_name=None, pre_execute=""):
+    def submitJob(self, script_name=None, pre_execute=[]):
         print(Fore.BLUE + f"Requesting node from {self.vendor_name} with account {self.account_name}")
         nodes = self.account.create_nodes(self.node_type, [self.jobname], need_confirmation=False, walltime=self.walltime)
 
         # execute pre-execute commands after nodes are available: e.g. data transfers
-        if pre_execute != "":
-            # append the command with account and job name
-            pre_execute += " --account=" + account_name + " -J" + job_name
-            os.system(pre_execute)
+        for cmd in pre_execute:
+            cmd += " --account=" + self.account_name + " -J" + self.jobname
+            os.system(cmd)
 
         # execute the commands listed in the script on the compute node
         if script_name is not None:
@@ -77,7 +76,7 @@ def parse_script(filename):
     account = ""
     constraint = ""
     walltime = ""
-    skyway_cmd = ""
+    skyway_cmds = []
     with open(filename, 'r') as f:
         lines = f.readlines()
         for line in lines:
@@ -97,9 +96,9 @@ def parse_script(filename):
                     if args[0] == "--constraint":
                         constraint = args[1]
                     if args[0] == "--time":
-                        walltime = args[1]                        
+                        walltime = args[1]
             elif "skyway_" in line:
-                skyway_cmd = line.strip('\n')
+                skyway_cmds.append(line.strip('\n'))
             else:
                 continue
 
@@ -107,7 +106,7 @@ def parse_script(filename):
              'account': account,
              'constraint': constraint,
              'walltime': walltime,
-             'skyway_cmd': skyway_cmd
+             'skyway_cmd': skyway_cmds
             }
 
 if __name__ == "__main__":
@@ -122,7 +121,7 @@ if __name__ == "__main__":
     account_name = args['account']
     node_type = args['constraint']
     walltime = args['walltime']
-    skyway_cmd = args['skyway_cmd']
+    skyway_cmds = args['skyway_cmd']
     provider = ""
 
     if provider == "":
@@ -139,7 +138,7 @@ if __name__ == "__main__":
             vendor_name = "rcc-midway3"
         else:
             print(f"account name {account_name} is not valid")
-            quit
+            sys.exit(1)
     else:
         vendor_name = provider
 
@@ -152,4 +151,4 @@ if __name__ == "__main__":
     instanceDescriptor = InstanceDescriptor(job_name, account_name, node_type, walltime, vendor_name)
 
     # submit job
-    instanceDescriptor.submitJob(script_name=script, pre_execute=skyway_cmd)
+    instanceDescriptor.submitJob(script_name=script, pre_execute=skyway_cmds)
