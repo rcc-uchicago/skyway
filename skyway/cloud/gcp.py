@@ -915,6 +915,16 @@ class GCP(Cloud):
                 usage = usage + running_cost
                 remaining_balance = user_budget - usage
                 unit_price = self.get_unit_price_instance(tpu_node)
+                walltime_hours = pt.hour + pt.minute / 60 + pt.second / 3600
+                projected_cost = unit_price * walltime_hours
+
+                if remaining_balance <= 0 or remaining_balance < projected_cost:
+                    print(f"User budget: ${user_budget:.3f}")
+                    print(f"+ Usage    : ${usage:.3f}")
+                    print(f"+ Available: ${remaining_balance:.3f}")
+                    print(f"The current budget is not sufficient for {walltime_str} at ${unit_price}/hr (projected cost: ${projected_cost:.3f}).")
+                    return
+
                 if need_confirmation:
                     print(f"User budget: ${user_budget:.3f}")
                     print(f"+ Usage    : ${usage:.3f}")
