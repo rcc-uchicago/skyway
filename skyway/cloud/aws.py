@@ -258,7 +258,7 @@ class AWS(Cloud):
             except botocore.exceptions.ClientError as e:
                 code = e.response['Error']['Code']
                 if code in ('InsufficientInstanceCapacity', 'Unsupported'):
-                    print(f'- Zone {zone or "auto"}: {instance_type_name} is not available.')
+                    #print(f'- Zone {zone or "auto"}: {instance_type_name} is not available.')
                     if len(zones_to_try) == 1:
                         all_azs = [az['ZoneName'] for az in
                                    self.ec2.meta.client.describe_availability_zones(
