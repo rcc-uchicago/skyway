@@ -152,13 +152,27 @@ class AZURE(Cloud):
         usage = usage + running_cost
         remaining_balance = user_budget - usage
         unit_price = self.vendor['node-types'][node_type]['price']
+
+        if walltime is None or walltime == "":
+            walltime_str = "00:30:00"
+        else:
+            walltime_str = walltime
+        pt = datetime.strptime(walltime_str, "%H:%M:%S")
+        walltime_hours = pt.hour + pt.minute / 60 + pt.second / 3600
+        walltime_in_minutes = int(pt.hour * 60 + pt.minute + pt.second / 60)
+        projected_cost = unit_price * walltime_hours
+
+        if remaining_balance <= 0 or remaining_balance < projected_cost:
+            print(f"User budget: ${user_budget:.3f}")
+            print(f"+ Usage    : ${usage:.3f}")
+            print(f"+ Available: ${remaining_balance:.3f}")
+            print(f"The current budget is not sufficient for {walltime_str} at ${unit_price}/hr (projected cost: ${projected_cost:.3f}).")
+            return
+
         if need_confirmation == True:
             print(f"User budget: ${user_budget:.3f}")
             print(f"+ Usage    : ${usage:.3f}")
             print(f"+ Available: ${remaining_balance:.3f}")
-            if remaining_balance <= 0:
-                print("The current budget is not sufficient for this request.")
-                return
             response = input(f"Do you want to create an instance of type {node_type} (${unit_price}/hr)? (y/n) ")
             if response == 'n':
                 return
@@ -169,15 +183,6 @@ class AZURE(Cloud):
         nodes = {}
         node_cfg = self.vendor['node-types'][node_type]
         size_name = node_cfg['name']           # e.g. "Standard_DS1_v2"
-        
-        if walltime is None or walltime == "":
-            walltime_str = "00:30:00"
-        else:
-            walltime_str = walltime
-
-        # shutdown the instance after the walltime (in minutes)
-        pt = datetime.strptime(walltime_str, "%H:%M:%S")
-        walltime_in_minutes = int(pt.hour * 60 + pt.minute + pt.second/60)
 
         if location != "":
            location_name = location
@@ -476,11 +481,41 @@ class AZURE(Cloud):
     def restart_nodes(self, IDs=[], node_names=[], need_confirmation=True, walltime=None):
         compute_client = ComputeManagementClient(self.credentials, self.account['subscription_id'])
         resource_group_name = self.account['resource_group']
-        if need_confirmation:
-            response = input(f"Do you want to restart {node_names or IDs}? (y/n) ")
-            if response != 'y':
-                return
+
+        user_name = os.environ['USER']
+        user_budget = self.get_budget(user_name=user_name, verbose=False)
+        usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
+        running_cost = self.get_running_cost(verbose=False)
+        usage = usage + running_cost
+        remaining_balance = user_budget - usage
+
+        if walltime is None or walltime == "":
+            walltime_str = "00:30:00"
+        else:
+            walltime_str = walltime
+        pt = datetime.strptime(walltime_str, "%H:%M:%S")
+        walltime_hours = pt.hour + pt.minute / 60 + pt.second / 3600
+
         for vm_name in node_names:
+            vm = compute_client.virtual_machines.get(resource_group_name, vm_name)
+            unit_price = self.get_unit_price_instance(vm)
+            projected_cost = unit_price * walltime_hours if unit_price is not None else 0.0
+
+            if remaining_balance <= 0 or remaining_balance < projected_cost:
+                print(f"User budget: ${user_budget:.3f}")
+                print(f"+ Usage    : ${usage:.3f}")
+                print(f"+ Available: ${remaining_balance:.3f}")
+                print(f"The current budget is not sufficient for {walltime_str} at ${unit_price}/hr (projected cost: ${projected_cost:.3f}).")
+                return
+
+            if need_confirmation:
+                print(f"User budget: ${user_budget:.3f}")
+                print(f"+ Usage    : ${usage:.3f}")
+                print(f"+ Available: ${remaining_balance:.3f}")
+                response = input(f"Do you want to restart {vm_name}? (y/n) ")
+                if response != 'y':
+                    return
+
             print(f"Starting VM: {vm_name}")
             compute_client.virtual_machines.begin_start(resource_group_name, vm_name).result()
             print(f"  VM {vm_name} started.")

@@ -159,13 +159,27 @@ class OCI(Cloud):
         usage = usage + running_cost
         remaining_balance = user_budget - usage
         unit_price = self.vendor['node-types'][node_type]['price']
+
+        if walltime is None or walltime == "":
+            walltime_str = "00:30:00"
+        else:
+            walltime_str = walltime
+        pt = datetime.strptime(walltime_str, "%H:%M:%S")
+        walltime_hours = pt.hour + pt.minute / 60 + pt.second / 3600
+        walltime_in_minutes = int(pt.hour * 60 + pt.minute + pt.second / 60)
+        projected_cost = unit_price * walltime_hours
+
+        if remaining_balance <= 0 or remaining_balance < projected_cost:
+            print(f"User budget: ${user_budget:.3f}")
+            print(f"+ Usage    : ${usage:.3f}")
+            print(f"+ Available: ${remaining_balance:.3f}")
+            print(f"The current budget is not sufficient for {walltime_str} at ${unit_price}/hr (projected cost: ${projected_cost:.3f}).")
+            return
+
         if need_confirmation == True:
             print(f"User budget: ${user_budget:.3f}")
             print(f"+ Usage    : ${usage:.3f}")
             print(f"+ Available: ${remaining_balance:.3f}")
-            if remaining_balance <= 0:
-                print("The current budget is not sufficient for this request.")
-                return
             response = input(f"Do you want to create an instance of type {node_type} (${unit_price}/hr)? (y/n) ")
             if response == 'n':
                 return
@@ -248,15 +262,6 @@ class OCI(Cloud):
         pem_file_full_path = path + self.account['private_key']
         username = self.vendor['username']
         public_ip = self.get_host_ip(instance.id)
-
-        if walltime is None or walltime == "":
-            walltime_str = "00:30:00"
-        else:
-            walltime_str = walltime
-
-        # shutdown the instance after the walltime (in minutes)
-        pt = datetime.strptime(walltime_str, "%H:%M:%S")
-        walltime_in_minutes = int(pt.hour * 60 + pt.minute + pt.second/60)
 
         # record node_type, launch time
         instance_type = str(self.vendor['node-types'][node_type]['name'])
@@ -608,11 +613,20 @@ class OCI(Cloud):
                 usage = usage + running_cost
                 remaining_balance = user_budget - usage
                 unit_price = self.get_unit_price_instance(instance)
+                walltime_hours = pt.hour + pt.minute / 60 + pt.second / 3600
+                projected_cost = unit_price * walltime_hours
+
+                if remaining_balance <= 0 or remaining_balance < projected_cost:
+                    print(f"User budget: ${user_budget:.3f}")
+                    print(f"+ Usage    : ${usage:.3f}")
+                    print(f"+ Available: ${remaining_balance:.3f}")
+                    print(f"The current budget is not sufficient for {walltime_str} at ${unit_price}/hr (projected cost: ${projected_cost:.3f}).")
+                    return
+
                 if need_confirmation == True:
                     print(f"User budget: ${user_budget:.3f}")
                     print(f"+ Usage    : ${usage:.3f}")
                     print(f"+ Available: ${remaining_balance:.3f}")
-                
                     response = input(f"Do you want to restart the instance of type {instance.shape} (${unit_price}/hr)? (y/n) ")
                     if response == 'n':
                         return
