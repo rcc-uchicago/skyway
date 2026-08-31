@@ -266,7 +266,7 @@ class AWS(Cloud):
                                    )['AvailabilityZones']]
                         fallbacks = [z for z in all_azs if z != zone]
                         zones_to_try.extend(fallbacks)
-                        print(f"  Retry in other zones:")
+                        #print(f"  Retry in other zones:")
                 else:
                     raise
 

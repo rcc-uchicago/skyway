@@ -249,7 +249,8 @@ class OCI(Cloud):
             except oci.exceptions.ServiceError as e:
                 #print(f'- AD {availability_domain.name}: {instance_type_name} is not available.')
                 if ad_idx == 0 and len(ads_to_try) > 1:
-                    print(f"  Retry in other availability domains:")
+                    pass
+                    #print(f"  Retry in other availability domains:")
 
         if instance is None:
             print(f"Failed to create {node_name} in any available AD.")

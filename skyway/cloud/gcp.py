@@ -532,7 +532,8 @@ class GCP(Cloud):
                         print(f"  (using fallback zone: {zone})")
                     break
                 except libcloud.common.google.ResourceNotFoundError as e:
-                    print(f'Zone {zone}: resource not found ({e})')
+                    if getattr(e, 'value', {}).get('reason') != 'notFound':
+                        print(f'Zone {zone}: resource not found ({e})')
                 except libcloud.common.google.GoogleBaseError as e:
                     print(f'Zone {zone}: Google Cloud error ({e})')
                 except Exception as e:
@@ -564,7 +565,7 @@ class GCP(Cloud):
                 if zone_idx == 0 and node_obj is None:
                     fallbacks = [z for z in self.get_locations() if z != preferred_zone]
                     zones_to_try.extend(fallbacks)
-                    print(f"  Retry in other US zones:")
+                    #print(f"  Retry in other US zones:")
 
             if node_obj is None:
                 print(f"Failed to create {node_name} in any available US zone.")
