@@ -177,9 +177,7 @@ class GCP(Cloud):
 
         df = pd.read_pickle(self.usage_history)
         df_user = df.loc[df['User'] == user_name].copy()
-        df_user = df_user.astype({"Cost": float})
         df_user = df_user.sort_values('End')
-        df_user['Balance'] = float(user_budget) - df_user['Cost'].cumsum()
 
         history = df_user[['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance']]
         return history

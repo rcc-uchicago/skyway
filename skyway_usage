@@ -117,4 +117,7 @@ if __name__ == "__main__":
     print("NOTE:")
     print("  + Running: live cost of currently active instances.")
     print("  + Usage and balance will be updated in the database after instances are terminated or stopped.")
+    if byjob == True:
+        print("  + An upward jump in Balance between two jobs indicates a budget adjustment.")
+        print("    The jump size equals the amount added (new_budget - old_budget).")
     
