@@ -4,6 +4,9 @@
 # Maintainer: Yuxing Peng, Trung Nguyen
 
 import os
+from datetime import datetime
+import pandas as pd
+import yaml
 from tabulate import tabulate
 from .. import utils
 
@@ -168,6 +171,62 @@ class Cloud():
         get the running cost of all the nodes (aka instances) (from the vendor API for running time and the unit cost)
         '''
         pass
+
+    def update_budget(self, user_name, new_budget, note=""):
+        '''
+        update a user's budget in the account YAML and append a record to the
+        budget adjustment log (budget-log-<account>.pkl)
+        '''
+        account_path = os.environ['SKYWAYROOT'] + '/etc/accounts/'
+        cfg_file = f"{account_path}{self.account_name}.yaml"
+        budget_log = f"{account_path}budget-log-{self.account_name}.pkl"
+
+        if user_name not in self.users:
+            raise Exception(f"{user_name} is not listed in the user group of this account.")
+
+        old_budget = float(self.users[user_name]['budget'])
+
+        # update the YAML file
+        with open(cfg_file, 'r') as f:
+            cfg = yaml.load(f, Loader=yaml.FullLoader)
+        cfg['users'][user_name]['budget'] = new_budget
+        with open(cfg_file, 'w') as f:
+            yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+
+        # update in-memory
+        self.users[user_name]['budget'] = new_budget
+
+        # append to adjustment log
+        adjusted_by = os.environ.get('USER', 'unknown')
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        cols = ['Timestamp', 'Account', 'User', 'OldBudget', 'NewBudget', 'AdjustedBy', 'Note']
+        new_row = pd.DataFrame([[timestamp, self.account_name, user_name,
+                                  old_budget, float(new_budget), adjusted_by, note]],
+                               columns=cols)
+        if os.path.isfile(budget_log):
+            df = pd.read_pickle(budget_log)
+            df = pd.concat([df, new_row], ignore_index=True)
+        else:
+            df = new_row
+        df.to_pickle(budget_log)
+
+        return old_budget, float(new_budget)
+
+    def get_budget_history(self, user_name=None):
+        '''
+        return the budget adjustment log for the account, optionally filtered by user
+        '''
+        account_path = os.environ['SKYWAYROOT'] + '/etc/accounts/'
+        budget_log = f"{account_path}budget-log-{self.account_name}.pkl"
+        cols = ['Timestamp', 'Account', 'User', 'OldBudget', 'NewBudget', 'AdjustedBy', 'Note']
+
+        if not os.path.isfile(budget_log):
+            return pd.DataFrame(columns=cols)
+
+        df = pd.read_pickle(budget_log)
+        if user_name is not None:
+            df = df.loc[df['User'] == user_name]
+        return df.reset_index(drop=True)
 
     def get_private_key(self):
         '''
