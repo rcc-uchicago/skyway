@@ -43,8 +43,10 @@ class InstanceDescriptor:
     def getUsage(self, user_name):
         # retrieve from database for the given account
         user_budget = self.account.get_budget(user_name=user_name, verbose=False)
-        accumulating_cost, remaining_balance = self.account.get_cost_and_usage_from_db(user_name=user_name)
-        return user_budget, accumulating_cost, remaining_balance
+        accumulating_cost, _ = self.account.get_cost_and_usage_from_db(user_name=user_name)
+        running_cost = self.account.get_running_cost(verbose=False, user_name=user_name)
+        remaining_balance = float(user_budget) - float(accumulating_cost) - float(running_cost)
+        return user_budget, accumulating_cost, running_cost, remaining_balance
 
     def getUsageHistory(self, user_name):
         df = self.account.get_usage_history_from_db(user_name=user_name)
@@ -95,10 +97,10 @@ if __name__ == "__main__":
     instanceDescriptor = InstanceDescriptor("", account_name, "", "", vendor_name)
 
     # usage
-    headers=["User", 'Allocation', 'Usage', 'Balance']
-    user_budget, usage, balance = instanceDescriptor.getUsage(user_name)
+    headers=["User", 'Allocation', 'Usage', 'Running', 'Balance']
+    user_budget, usage, running_cost, balance = instanceDescriptor.getUsage(user_name)
 
-    data = [[user_name, user_budget, usage, balance]]
+    data = [[user_name, user_budget, f"${usage:.4f}", f"${running_cost:.4f}", f"${balance:.4f}"]]
     print(tabulate(data, headers=headers))
 
     if byjob == True:
@@ -113,7 +115,6 @@ if __name__ == "__main__":
             print(df)
 
     print("NOTE:")
-    if byjob == True:
-        print("  + The cost of running instances estimated from the wall time requested.")    
-    print("  + The usage and balance will be updated after running instances are terminated or stopped.")    
+    print("  + Running: live cost of currently active instances.")
+    print("  + Usage and balance will be updated in the database after instances are terminated or stopped.")
     
