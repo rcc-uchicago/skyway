@@ -798,8 +798,7 @@ class AZURE(Cloud):
             return 0, user_budget
 
         df = pd.read_pickle(self.usage_history)
-        df_user = df.loc[df['User'] == user_name].copy()
-        df_user = df_user.sort_values('End')
+        df_user = df.loc[df['User'] == user_name]
 
         history = df_user[['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance']]
         return history
