@@ -1235,10 +1235,11 @@ class GCP(Cloud):
         """
         return self.driver.list_nodes()
 
-    def get_running_cost(self, verbose=True):
+    def get_running_cost(self, verbose=True, user_name=None):
 
         current_time = datetime.now(timezone.utc)
-        user_name = os.environ['USER']
+        if user_name is None:
+            user_name = os.environ['USER']
         nodes = []
         total_cost = 0.0
         for node in self.driver.list_nodes():

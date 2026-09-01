@@ -951,9 +951,10 @@ class OCI(Cloud):
             return self.vendor['node-types'][node_type]['price']
         return -1.0
 
-    def get_running_cost(self, verbose=True):
+    def get_running_cost(self, verbose=True, user_name=None):
         instances = self.get_instances()
-        user_name = os.environ['USER']
+        if user_name is None:
+            user_name = os.environ['USER']
 
         nodes = []
         total_cost = 0.0

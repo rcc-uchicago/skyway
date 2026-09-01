@@ -464,9 +464,10 @@ class SLURMCluster(Cloud):
             print("", file=output_str)
         return nodes, output_str
 
-    def get_running_cost(self, verbose=True):
+    def get_running_cost(self, verbose=True, user_name=None):
         total_cost = 0.0
-        user_name = os.environ['USER']
+        if user_name is None:
+            user_name = os.environ['USER']
 
         # job_id state job_name account nodelist   runningtime starttime comment user_name"
         cmd = f"export SQUEUE_FORMAT=\"%13i %.4t %24j %16a %N %M %V %k %u\"; squeue -u {user_name} -h"
