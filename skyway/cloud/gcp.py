@@ -18,7 +18,7 @@ from tabulate import tabulate
 import time
 import traceback
 
-from .core import Cloud
+from .core import Cloud, parse_walltime
 from .. import utils
 
 from colorama import Fore
@@ -415,9 +415,7 @@ class GCP(Cloud):
             walltime_str = "00:30:00"
         else:
             walltime_str = walltime
-        pt = datetime.strptime(walltime_str, "%H:%M:%S")
-        walltime_hours = pt.hour + pt.minute / 60 + pt.second / 3600
-        walltime_in_minutes = int(pt.hour * 60 + pt.minute + pt.second / 60)
+        walltime_hours, walltime_in_minutes = parse_walltime(walltime_str)
         projected_cost = unit_price * walltime_hours
 
         if remaining_balance <= 0 or remaining_balance < projected_cost:
@@ -799,8 +797,7 @@ class GCP(Cloud):
             walltime_str = walltime
 
         # shutdown the instance after the walltime (in minutes)
-        pt = datetime.strptime(walltime_str, "%H:%M:%S")
-        walltime_in_minutes = int(pt.hour * 60 + pt.minute + pt.second/60)
+        walltime_hours, walltime_in_minutes = parse_walltime(walltime_str)
 
         for node in self.driver.list_nodes():
             if node.state != "stopped":
@@ -818,7 +815,6 @@ class GCP(Cloud):
                 usage = usage + running_cost
                 remaining_balance = user_budget - usage
                 unit_price = self.get_unit_price_instance(node)
-                walltime_hours = pt.hour + pt.minute / 60 + pt.second / 3600
                 projected_cost = unit_price * walltime_hours
 
                 if remaining_balance <= 0 or remaining_balance < projected_cost:
@@ -916,7 +912,6 @@ class GCP(Cloud):
                 usage = usage + running_cost
                 remaining_balance = user_budget - usage
                 unit_price = self.get_unit_price_instance(tpu_node)
-                walltime_hours = pt.hour + pt.minute / 60 + pt.second / 3600
                 projected_cost = unit_price * walltime_hours
 
                 if remaining_balance <= 0 or remaining_balance < projected_cost:

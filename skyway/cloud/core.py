@@ -10,6 +10,19 @@ import yaml
 from tabulate import tabulate
 from .. import utils
 
+def parse_walltime(walltime_str):
+    """Parse HH:MM:SS or D-HH:MM:SS and return (total_hours, total_minutes_int)."""
+    days = 0
+    if '-' in walltime_str:
+        day_part, time_part = walltime_str.split('-', 1)
+        days = int(day_part)
+    else:
+        time_part = walltime_str
+    h, m, s = (int(x) for x in time_part.split(':'))
+    total_minutes = days * 1440 + h * 60 + m + s // 60
+    return total_minutes / 60, total_minutes
+
+
 # Provide the API for child classes to override
 
 class Cloud():

@@ -20,6 +20,7 @@ from skyway.cloud.gcp import *
 from skyway.cloud.azure import *
 from skyway.cloud.slurm import *
 from skyway.cloud.oci import *
+from skyway.cloud.core import parse_walltime
 from skyway import utils
 
 class InstanceDescriptor:
@@ -106,8 +107,7 @@ class InstanceDescriptor:
         return remaining_balance
 
     def getEstimateCost(self):
-        pt = datetime.strptime(self.walltime, "%H:%M:%S")
-        walltime_in_hours = int(pt.hour + pt.minute/60)
+        walltime_in_hours, _ = parse_walltime(self.walltime)
         if "midway3" in self.vendor_name:
             unit_price = 1.0 # float(self.account.get_unit_price(self.node_type))
         else:

@@ -16,7 +16,7 @@ from tabulate import tabulate
 import time
 import traceback
 
-from .core import Cloud
+from .core import Cloud, parse_walltime
 from .. import utils
 
 from colorama import Fore
@@ -157,9 +157,7 @@ class AZURE(Cloud):
             walltime_str = "00:30:00"
         else:
             walltime_str = walltime
-        pt = datetime.strptime(walltime_str, "%H:%M:%S")
-        walltime_hours = pt.hour + pt.minute / 60 + pt.second / 3600
-        walltime_in_minutes = int(pt.hour * 60 + pt.minute + pt.second / 60)
+        walltime_hours, walltime_in_minutes = parse_walltime(walltime_str)
         projected_cost = unit_price * walltime_hours
 
         if remaining_balance <= 0 or remaining_balance < projected_cost:
@@ -493,8 +491,7 @@ class AZURE(Cloud):
             walltime_str = "00:30:00"
         else:
             walltime_str = walltime
-        pt = datetime.strptime(walltime_str, "%H:%M:%S")
-        walltime_hours = pt.hour + pt.minute / 60 + pt.second / 3600
+        walltime_hours, _ = parse_walltime(walltime_str)
 
         for vm_name in node_names:
             vm = compute_client.virtual_machines.get(resource_group_name, vm_name)

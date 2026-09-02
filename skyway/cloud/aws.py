@@ -16,7 +16,7 @@ import subprocess
 from tabulate import tabulate
 import traceback
 
-from .core import Cloud
+from .core import Cloud, parse_walltime
 from .. import utils
 
 from colorama import Fore
@@ -185,9 +185,7 @@ class AWS(Cloud):
             walltime_str = "00:30:00"
         else:
             walltime_str = walltime
-        pt = datetime.strptime(walltime_str, "%H:%M:%S")
-        walltime_hours = pt.hour + pt.minute / 60 + pt.second / 3600
-        walltime_in_minutes = int(pt.hour * 60 + pt.minute + pt.second / 60)
+        walltime_hours, walltime_in_minutes = parse_walltime(walltime_str)
         projected_cost = unit_price * walltime_hours
 
         if remaining_balance <= 0 or remaining_balance < projected_cost:
@@ -601,9 +599,8 @@ class AWS(Cloud):
             walltime_str = walltime
 
         # shutdown the instance after the walltime (in minutes)
-        pt = datetime.strptime(walltime_str, "%H:%M:%S")
-        walltime_in_minutes = int(pt.hour * 60 + pt.minute + pt.second/60)
-        
+        walltime_hours, walltime_in_minutes = parse_walltime(walltime_str)
+
         if node_names is None and IDs is None:
             raise ValueError(f"node_names and IDs cannot be both empty.")
 
@@ -633,7 +630,6 @@ class AWS(Cloud):
                 remaining_balance = user_budget - usage
                 node_type = instance.instance_type
                 unit_price = self.get_unit_price_instance(instance)
-                walltime_hours = pt.hour + pt.minute / 60 + pt.second / 3600
                 projected_cost = unit_price * walltime_hours
 
                 if remaining_balance <= 0 or remaining_balance < projected_cost:
