@@ -300,7 +300,7 @@ class AWS(Cloud):
             # record the running time and cost at launch time and expected walltime
             # then if destroy_nodes() is invoked then updated the end time and cost
             
-            running_time = timedelta(hours=pt.hour, minutes=pt.minute, seconds=pt.second)
+            running_time = timedelta(hours=walltime_hours)
             instance_unit_cost = self.get_unit_price_instance(instance)
             projected_running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
             usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)

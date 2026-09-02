@@ -577,7 +577,7 @@ class GCP(Cloud):
 
             user_name = os.environ['USER']
 
-            running_time = timedelta(hours=pt.hour, minutes=pt.minute, seconds=pt.second)
+            running_time = timedelta(hours=walltime_hours)
             instance_unit_cost = self.get_unit_price_instance(node_obj)
             projected_running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
             usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
@@ -873,7 +873,7 @@ class GCP(Cloud):
                 print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{node.public_ips[0]} or")
                 print(f"  skyway_connect --account={self.account_name} -J {node.name}")
 
-                running_time = timedelta(hours=pt.hour, minutes=pt.minute, seconds=pt.second)
+                running_time = timedelta(hours=walltime_hours)
                 instance_unit_cost = self.get_unit_price_instance(node)
                 projected_running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
@@ -949,7 +949,7 @@ class GCP(Cloud):
                 print(f'\nTPU VM {short_name} is up.')
                 print("To connect to the instance, run:")
                 print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host}")
-                running_time = timedelta(hours=pt.hour, minutes=pt.minute, seconds=pt.second)
+                running_time = timedelta(hours=walltime_hours)
                 projected_running_cost = running_time.total_seconds() / 3600.0 * unit_price
                 usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
                 end_time = current_time + running_time
