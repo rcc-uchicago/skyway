@@ -17,7 +17,7 @@ from tabulate import tabulate
 import time
 import traceback
 
-from .core import Cloud
+from .core import Cloud, parse_walltime
 from .. import utils
 
 from colorama import Fore
@@ -164,9 +164,7 @@ class OCI(Cloud):
             walltime_str = "00:30:00"
         else:
             walltime_str = walltime
-        pt = datetime.strptime(walltime_str, "%H:%M:%S")
-        walltime_hours = pt.hour + pt.minute / 60 + pt.second / 3600
-        walltime_in_minutes = int(pt.hour * 60 + pt.minute + pt.second / 60)
+        walltime_hours, walltime_in_minutes = parse_walltime(walltime_str)
         projected_cost = unit_price * walltime_hours
 
         if remaining_balance <= 0 or remaining_balance < projected_cost:
@@ -274,7 +272,7 @@ class OCI(Cloud):
         # record the running time and cost at launch time and expected walltime
         # then if destroy_nodes() is invoked then updated the end time and cost
             
-        running_time = timedelta(hours=pt.hour, minutes=pt.minute, seconds=pt.second)
+        running_time = timedelta(hours=walltime_hours)
         instance_unit_cost = self.get_unit_price_instance(instance)
         projected_running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
         usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
@@ -588,8 +586,7 @@ class OCI(Cloud):
             walltime_str = walltime
 
         # shutdown the instance after the walltime (in minutes)
-        pt = datetime.strptime(walltime_str, "%H:%M:%S")
-        walltime_in_minutes = int(pt.hour * 60 + pt.minute + pt.second/60)
+        walltime_hours, walltime_in_minutes = parse_walltime(walltime_str)
 
         # List all instances in the compartment
         instance_list = oci.pagination.list_call_get_all_results(
@@ -614,7 +611,6 @@ class OCI(Cloud):
                 usage = usage + running_cost
                 remaining_balance = user_budget - usage
                 unit_price = self.get_unit_price_instance(instance)
-                walltime_hours = pt.hour + pt.minute / 60 + pt.second / 3600
                 projected_cost = unit_price * walltime_hours
 
                 if remaining_balance <= 0 or remaining_balance < projected_cost:
