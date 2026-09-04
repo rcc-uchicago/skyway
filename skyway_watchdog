@@ -1,0 +1,312 @@
+#!/usr/bin/env python
+"""
+skyway_watchdog - Monitor budgets and terminate over-budget instances.
+
+Two thresholds:
+  --warn-threshold (default 0.90): log a warning listing the user's running
+      instances when their total cost reaches this fraction of their budget.
+  Termination at 100%: terminate any instance whose owner has no remaining
+      balance.
+
+Run periodically as an admin (e.g., every 5 minutes via cron).  Enforcement
+is entirely outside the instance — users cannot cancel it from within the VM.
+
+Cron example:
+  */5 * * * * source /path/to/env/bin/activate && \\
+      SKYWAYROOT=/path/to/skyway skyway_watchdog -A rcc-aws
+"""
+import argparse
+import glob
+import logging
+import os
+import sys
+from datetime import datetime, timezone
+
+import pandas as pd
+import yaml
+
+import skyway
+from skyway.cloud.aws import AWS
+from skyway.cloud.azure import AZURE
+from skyway.cloud.gcp import GCP
+from skyway.cloud.oci import OCI
+
+SUPPORTED_VENDORS = ('aws', 'azure', 'gcp', 'oci')
+
+
+# ---------------------------------------------------------------------------
+# Provider-specific adapters
+# ---------------------------------------------------------------------------
+
+def _iter_running(account, vendor_name):
+    """
+    Yield (instance_obj, name, instance_id, instance_type, launch_time)
+    for every running, non-protected instance in the account.
+    """
+    protected = set(account.account.get('protected_nodes', []))
+
+    if vendor_name == 'aws':
+        for inst in account.get_instances(filters=[{
+            'Name': 'instance-state-name', 'Values': ['running']
+        }]):
+            name = account.get_instance_name(inst)
+            if name in protected:
+                continue
+            yield inst, name, inst.instance_id, str(inst.instance_type), inst.launch_time
+
+    elif vendor_name == 'gcp':
+        for node in account.get_instances():
+            if node.state != 'running':
+                continue
+            name = account.get_instance_name(node)
+            if name in protected:
+                continue
+            ts = node.extra.get('creationTimestamp')
+            if not ts:
+                continue
+            launch_time = datetime.strptime(ts, '%Y-%m-%dT%H:%M:%S.%f%z')
+            yield node, name, node.id, node.size or '', launch_time
+
+    elif vendor_name == 'oci':
+        for inst in account.get_instances():   # already filters to RUNNING
+            name = account.get_instance_name(inst)
+            if name in protected:
+                continue
+            yield inst, name, inst.id, inst.shape, inst.time_created
+
+    elif vendor_name == 'azure':
+        from azure.mgmt.compute import ComputeManagementClient
+        compute_client = ComputeManagementClient(
+            account.credentials, account.account['subscription_id'])
+        for node in compute_client.virtual_machines.list_all():
+            name = account.get_instance_name(node)
+            if name in protected:
+                continue
+            state = account.get_instance_status(node)
+            if state != 'running':
+                continue
+            yield node, name, node.vm_id, node.hardware_profile.vm_size, node.time_created
+
+
+def _terminate(account, vendor_name, instance, instance_name):
+    """Call the provider's API to terminate the instance."""
+    if vendor_name == 'aws':
+        instance.terminate()
+    elif vendor_name == 'gcp':
+        account.driver.destroy_node(instance)
+    elif vendor_name == 'oci':
+        account.compute_client.terminate_instance(
+            instance.id, preserve_boot_volume=False)
+    elif vendor_name == 'azure':
+        from azure.mgmt.compute import ComputeManagementClient
+        compute_client = ComputeManagementClient(
+            account.credentials, account.account['subscription_id'])
+        compute_client.virtual_machines.begin_delete(
+            account.account['resource_group'], instance_name).result()
+
+
+# ---------------------------------------------------------------------------
+# DB update
+# ---------------------------------------------------------------------------
+
+def _update_db(account, user_name, instance_id, instance_type,
+               launch_time, end_time, actual_cost):
+    """Write actual end time and cost into the usage-history pickle."""
+    _, remaining_balance = account.get_cost_and_usage_from_db(user_name=user_name)
+
+    row = [user_name, instance_id, instance_type,
+           launch_time, end_time, actual_cost, remaining_balance]
+    cols = ['User', 'InstanceID', 'InstanceType', 'Start', 'End', 'Cost', 'Balance']
+
+    if os.path.isfile(account.usage_history):
+        df = pd.read_pickle(account.usage_history)
+    else:
+        df = pd.DataFrame([], columns=cols)
+
+    if instance_id in df['InstanceID'].values:
+        df.loc[df['InstanceID'] == instance_id, 'End'] = end_time
+        df.loc[df['InstanceID'] == instance_id, 'Cost'] = actual_cost
+        df.loc[df['InstanceID'] == instance_id, 'Balance'] = remaining_balance
+    else:
+        df = pd.concat([pd.DataFrame([row], columns=cols), df], ignore_index=True)
+
+    df.to_pickle(account.usage_history)
+
+
+# ---------------------------------------------------------------------------
+# Core logic
+# ---------------------------------------------------------------------------
+
+def _make_account(account_name, vendor_name):
+    if vendor_name == 'aws':
+        return AWS(account_name)
+    if vendor_name == 'azure':
+        return AZURE(account_name)
+    if vendor_name == 'gcp':
+        return GCP(account_name)
+    if vendor_name == 'oci':
+        return OCI(account_name)
+    return None
+
+
+def check_account(account_name, vendor_name, warn_threshold=0.90,
+                  dry_run=False, logger=None):
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    account = _make_account(account_name, vendor_name)
+    if account is None:
+        logger.warning(f"Vendor '{vendor_name}' not supported; skipping {account_name}")
+        return
+
+    # Collect all running instances grouped by user
+    user_instances = {}  # user_name -> [(instance, name, id, type, launch_time)]
+    for instance, name, iid, itype, launch_time in _iter_running(account, vendor_name):
+        user_name = account.get_instance_user_name(instance)
+        if not user_name or user_name not in account.users:
+            logger.warning(f"{name} ({iid}): unknown user '{user_name}', skipping")
+            continue
+        user_instances.setdefault(user_name, []).append(
+            (instance, name, iid, itype, launch_time))
+
+    for user_name, instances in user_instances.items():
+        budget = float(account.get_budget(user_name=user_name, verbose=False))
+
+        try:
+            accumulated, _ = account.get_cost_and_usage_from_db(user_name=user_name)
+            accumulated = float(accumulated)
+        except Exception as e:
+            logger.warning(f"Cannot read DB cost for {user_name}: {e}")
+            accumulated = 0.0
+
+        now = datetime.now(timezone.utc)
+
+        # Compute live cost and build a per-instance summary
+        running_rows = []
+        live_total = 0.0
+        for (instance, name, iid, itype, launch_time) in instances:
+            unit_price = account.get_unit_price_instance(instance)
+            elapsed_h = (now - launch_time).total_seconds() / 3600.0
+            live_cost = elapsed_h * unit_price
+            live_total += live_cost
+            running_rows.append((name, iid, itype, elapsed_h, live_cost))
+
+        total_cost = accumulated + live_total
+        remaining = budget - total_cost
+        pct = (total_cost / budget * 100) if budget > 0 else 0.0
+
+        logger.debug(
+            f"{account_name}/{user_name}: budget=${budget:.4f} "
+            f"accumulated=${accumulated:.4f} live=${live_total:.4f} "
+            f"total=${total_cost:.4f} ({pct:.1f}%)"
+        )
+
+        # ── Warning threshold ─────────────────────────────────────────────
+        if total_cost / budget >= warn_threshold and remaining > 0:
+            job_lines = [f"  {'Instance':<25} {'InstanceID':<22} {'Type':<20} {'Elapsed':>9} {'Live Cost':>10}"]
+            job_lines.append("  " + "-" * 90)
+            for (name, iid, itype, elapsed_h, live_cost) in running_rows:
+                h = int(elapsed_h)
+                m = int((elapsed_h - h) * 60)
+                job_lines.append(
+                    f"  {name:<25} {iid:<22} {itype:<20} {h:>5}h{m:02d}m  ${live_cost:>8.4f}")
+
+            logger.warning(
+                f"BUDGET WARNING [{account_name}] user={user_name}  "
+                f"{pct:.1f}% used  (${total_cost:.4f} of ${budget:.4f},"
+                f" ${remaining:.4f} remaining)\n"
+                + "\n".join(job_lines)
+            )
+
+        # ── Termination threshold ─────────────────────────────────────────
+        if remaining < 0:
+            logger.warning(
+                f"OVER BUDGET: {account_name}/{user_name} "
+                f"budget=${budget:.4f} total=${total_cost:.4f} "
+                f"overage=${-remaining:.4f}"
+                + (" [DRY RUN]" if dry_run else " — terminating all instances")
+            )
+
+            if dry_run:
+                continue
+
+            for (instance, name, iid, itype, launch_time) in instances:
+                end_time = datetime.now(timezone.utc)
+                unit_price = account.get_unit_price_instance(instance)
+                actual_cost = (end_time - launch_time).total_seconds() / 3600.0 * unit_price
+
+                _terminate(account, vendor_name, instance, name)
+                logger.info(f"Terminated {name} ({iid}) — actual cost ${actual_cost:.4f}")
+
+                _update_db(account, user_name, iid, itype,
+                           launch_time, end_time, actual_cost)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+def _vendor_from_yaml(yaml_path):
+    with open(yaml_path) as f:
+        cfg = yaml.safe_load(f)
+    return cfg.get('cloud', '')
+
+
+if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s %(levelname)s %(message)s',
+        datefmt='%Y-%m-%dT%H:%M:%S',
+    )
+    logger = logging.getLogger('skyway_watchdog')
+
+    skywayroot = os.environ.get('SKYWAYROOT', '')
+    if not skywayroot:
+        sys.exit("SKYWAYROOT is not defined.")
+
+    parser = argparse.ArgumentParser(
+        description="Monitor budgets: warn at threshold, terminate when exceeded"
+    )
+    parser.add_argument('-A', '--account', dest='account', default='',
+                        help="Account name (default: all supported cloud accounts)")
+    parser.add_argument('--provider', dest='provider', default='',
+                        help="Limit to one vendor: aws, azure, gcp, or oci")
+    parser.add_argument('--warn-threshold', dest='warn_threshold', type=float,
+                        default=0.90,
+                        help="Fraction of budget that triggers a warning (default: 0.90)")
+    parser.add_argument('--dry-run', dest='dry_run', action='store_true', default=False,
+                        help="Report over-budget instances without terminating them")
+    args = parser.parse_args()
+
+    accounts_path = os.path.join(skywayroot, 'etc', 'accounts')
+    provider_filter = args.provider.lower()
+
+    if args.account:
+        yaml_path = os.path.join(accounts_path, f"{args.account}.yaml")
+        if not os.path.isfile(yaml_path):
+            sys.exit(f"Account config not found: {yaml_path}")
+        vendor = _vendor_from_yaml(yaml_path)
+        if provider_filter and vendor != provider_filter:
+            sys.exit(f"Account {args.account} is '{vendor}', not '{provider_filter}'")
+        accounts_to_check = [(args.account, vendor)]
+    else:
+        accounts_to_check = []
+        for yaml_path in sorted(glob.glob(os.path.join(accounts_path, '*.yaml'))):
+            account_name = os.path.basename(yaml_path).replace('.yaml', '')
+            vendor = _vendor_from_yaml(yaml_path)
+            if provider_filter and vendor != provider_filter:
+                continue
+            if vendor in SUPPORTED_VENDORS:
+                accounts_to_check.append((account_name, vendor))
+
+    for account_name, vendor_name in accounts_to_check:
+        logger.info(f"Checking {account_name} ({vendor_name}) ...")
+        try:
+            check_account(
+                account_name, vendor_name,
+                warn_threshold=args.warn_threshold,
+                dry_run=args.dry_run,
+                logger=logger,
+            )
+        except Exception as e:
+            logger.error(f"Error checking {account_name}: {e}", exc_info=True)
