@@ -1,0 +1,257 @@
+#!/usr/bin/env python
+"""
+skyway_history - Show per-job usage history and amend missing PKL entries.
+
+Usage:
+  skyway_history -A rcc-gcp -u username
+  skyway_history -A rcc-gcp -u username --amend INSTANCE_ID [--dry-run]
+
+The --amend flag detects whether the instance has an unrecorded session
+(i.e., it was restarted after the last PKL entry) and prepends the missing row.
+The cost written reflects elapsed time since the last restart; stop_nodes or
+destroy_nodes will overwrite the End timestamp when the instance is eventually
+stopped, but Cost stays fixed (matching the rest of the accounting design).
+"""
+import argparse
+import os
+import sys
+from datetime import datetime, timezone
+
+import pandas as pd
+from tabulate import tabulate
+
+import skyway
+from skyway.cloud.aws import AWS
+from skyway.cloud.gcp import GCP
+from skyway.cloud.azure import AZURE
+from skyway.cloud.oci import OCI
+
+SUPPORTED_VENDORS = ('aws', 'gcp', 'oci', 'azure')
+
+
+def _infer_vendor(account_name, provider_arg):
+    if provider_arg:
+        return provider_arg.lower()
+    for keyword in ('aws', 'gcp', 'azure', 'oci'):
+        if keyword in account_name:
+            return keyword
+    return None
+
+
+def _make_account(account_name, vendor_name):
+    if vendor_name == 'aws':
+        return AWS(account_name)
+    if vendor_name == 'gcp':
+        return GCP(account_name)
+    if vendor_name == 'azure':
+        return AZURE(account_name)
+    if vendor_name == 'oci':
+        return OCI(account_name)
+    return None
+
+
+def _parse_ts(ts):
+    """Parse a timestamp string that may or may not have fractional seconds."""
+    if isinstance(ts, datetime):
+        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+    for fmt in ('%Y-%m-%dT%H:%M:%S.%f%z', '%Y-%m-%dT%H:%M:%S%z'):
+        try:
+            return datetime.strptime(ts, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"Cannot parse timestamp: {ts!r}")
+
+
+def _find_instance(account, vendor_name, instance_id):
+    """Return the instance object matching instance_id, or None."""
+    if vendor_name == 'aws':
+        for inst in account.get_instances():
+            if inst.instance_id == instance_id:
+                return inst
+    elif vendor_name == 'gcp':
+        for node in account.driver.list_nodes():
+            if node.id == instance_id:
+                return node
+    elif vendor_name == 'oci':
+        for inst in account.get_instances():
+            if inst.id == instance_id:
+                return inst
+    elif vendor_name == 'azure':
+        from azure.mgmt.compute import ComputeManagementClient
+        cc = ComputeManagementClient(account.credentials,
+                                     account.account['subscription_id'])
+        for vm in cc.virtual_machines.list_all():
+            if vm.vm_id == instance_id:
+                return vm
+    return None
+
+
+def _get_last_start_time(instance, vendor_name):
+    """
+    Return the most recent start time of the instance as a timezone-aware datetime.
+
+    GCP: prefers lastStartTimestamp (resets on each start) over creationTimestamp.
+    AWS: launch_time resets on each start/restart — already the right value.
+    OCI/Azure: only creation time is readily available; we fall back to it.
+    """
+    if vendor_name == 'gcp':
+        ts = instance.extra.get('lastStartTimestamp') or instance.extra.get('creationTimestamp')
+        if ts:
+            return _parse_ts(ts)
+    elif vendor_name == 'aws':
+        return instance.launch_time
+    elif vendor_name == 'oci':
+        return _parse_ts(instance.time_created)
+    elif vendor_name == 'azure':
+        if hasattr(instance, 'time_created') and instance.time_created:
+            return _parse_ts(instance.time_created)
+    return None
+
+
+def _get_instance_type(instance, vendor_name):
+    if vendor_name == 'aws':
+        return str(instance.instance_type)
+    elif vendor_name == 'gcp':
+        return instance.size or ''
+    elif vendor_name == 'oci':
+        return instance.shape or ''
+    elif vendor_name == 'azure':
+        return instance.hardware_profile.vm_size if instance.hardware_profile else ''
+    return ''
+
+
+def _load_pkl(account):
+    if os.path.isfile(account.usage_history):
+        return pd.read_pickle(account.usage_history)
+    return pd.DataFrame([], columns=['User', 'InstanceID', 'InstanceType',
+                                     'Start', 'End', 'Cost', 'Balance'])
+
+
+def _show_history(account, user_name):
+    df = _load_pkl(account)
+    df_user = df.loc[df['User'] == user_name]
+    if df_user.empty:
+        print(f"No history found for user '{user_name}'.")
+    else:
+        print(df_user[['User', 'InstanceID', 'InstanceType', 'Start', 'End',
+                        'Cost', 'Balance']].to_string(index=False))
+
+
+def _amend(account, vendor_name, instance_id, user_name, dry_run):
+    # --- locate instance ---
+    instance = _find_instance(account, vendor_name, instance_id)
+    if instance is None:
+        print(f"ERROR: Instance '{instance_id}' not found in {vendor_name} account.")
+        sys.exit(1)
+
+    # --- verify ownership ---
+    owner = account.get_instance_user_name(instance)
+    if owner != user_name:
+        print(f"ERROR: Instance '{instance_id}' belongs to '{owner}', not '{user_name}'.")
+        sys.exit(1)
+
+    # --- get last restart time ---
+    last_start = _get_last_start_time(instance, vendor_name)
+    if last_start is None:
+        print(f"ERROR: Cannot determine last start time for '{instance_id}'.")
+        sys.exit(1)
+
+    now = datetime.now(timezone.utc)
+
+    # --- inspect PKL ---
+    df = _load_pkl(account)
+    df_inst = df[df['InstanceID'] == instance_id]
+
+    if df_inst.empty:
+        max_end = None
+        print(f"Instance '{instance_id}' has no PKL entries at all.")
+    else:
+        ends = pd.to_datetime(df_inst['End'], errors='coerce', utc=True)
+        max_end = ends.dropna().max()
+        print(f"Most recent PKL End for '{instance_id}': {max_end}")
+
+    print(f"API last start time:                        {last_start}")
+
+    # --- gap check (allow 5-minute tolerance for clock skew) ---
+    GAP_TOLERANCE = pd.Timedelta(minutes=5)
+    if max_end is not None and last_start <= max_end + GAP_TOLERANCE:
+        print("\nNo unrecorded session detected — last_start is not after the most recent PKL End.")
+        print("Nothing to amend.")
+        return
+
+    # --- compute cost for the unrecorded session ---
+    elapsed_h = (now - last_start).total_seconds() / 3600.0
+    unit_price = account.get_unit_price_instance(instance)
+    if unit_price < 0:
+        print(f"WARNING: unit price not found for instance type '{_get_instance_type(instance, vendor_name)}'; cost will be 0.")
+        unit_price = 0.0
+    session_cost = elapsed_h * unit_price
+
+    accumulated = float(account.get_cost_and_usage_from_db(user_name=user_name)[0])
+    budget = float(account.get_budget(user_name=user_name, verbose=False))
+    # balance after this session is recorded
+    remaining_balance = budget - accumulated - session_cost
+
+    instance_type = _get_instance_type(instance, vendor_name)
+    start_str = last_start.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+    end_str = now.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+
+    row = [user_name, instance_id, instance_type, start_str, end_str,
+           session_cost, remaining_balance]
+    cols = ['User', 'InstanceID', 'InstanceType', 'Start', 'End', 'Cost', 'Balance']
+
+    print(f"\nProposed row to prepend to {account.usage_history}:")
+    print(tabulate([row], headers=cols, floatfmt='.4f'))
+    print(f"\nNotes:")
+    print(f"  Start = API lastStartTimestamp ({start_str})")
+    print(f"  End   = now ({end_str}) — will be overwritten by stop_nodes/destroy_nodes")
+    print(f"  Cost  = {elapsed_h:.3f}h × ${unit_price}/h = ${session_cost:.4f}")
+    print(f"          (covers elapsed time to now; any runtime after this amend is NOT included)")
+
+    if dry_run:
+        print("\n[DRY RUN] No changes made.")
+        return
+
+    confirm = input("\nPrepend this row to the PKL? (y/n) ")
+    if confirm.strip().lower() != 'y':
+        print("Aborted — no changes made.")
+        return
+
+    df_new = pd.concat([pd.DataFrame([row], columns=cols), df], ignore_index=True)
+    df_new.to_pickle(account.usage_history)
+    print(f"Done. PKL updated: {account.usage_history}")
+
+
+if __name__ == '__main__':
+    skywayroot = os.environ.get('SKYWAYROOT', '')
+    if not skywayroot:
+        sys.exit("SKYWAYROOT is not defined.")
+
+    parser = argparse.ArgumentParser(
+        description="Show per-job usage history; optionally amend a missing PKL entry"
+    )
+    parser.add_argument('-A', '--account', dest='account', required=True,
+                        help="Account name (e.g. rcc-gcp)")
+    parser.add_argument('-u', '--user', dest='username', required=True,
+                        help="User name")
+    parser.add_argument('--provider', dest='provider', default='',
+                        help="Vendor override: aws, gcp, oci, or azure")
+    parser.add_argument('--amend', dest='amend_id', default=None, metavar='INSTANCE_ID',
+                        help="Amend PKL for the given instance ID if a session is missing")
+    parser.add_argument('--dry-run', dest='dry_run', action='store_true', default=False,
+                        help="Show what would be written without modifying the PKL")
+    args = parser.parse_args()
+
+    vendor_name = _infer_vendor(args.account, args.provider)
+    if vendor_name not in SUPPORTED_VENDORS:
+        sys.exit(f"Cannot infer vendor from account name '{args.account}'. "
+                 f"Use --provider to specify one of: {', '.join(SUPPORTED_VENDORS)}")
+
+    account = _make_account(args.account, vendor_name)
+    if account is None:
+        sys.exit(f"Failed to create account object for '{args.account}'.")
+
+    if args.amend_id:
+        _amend(account, vendor_name, args.amend_id, args.username, args.dry_run)
+    else:
+        _show_history(account, args.username)
