@@ -208,13 +208,13 @@ def check_account(account_name, vendor_name, warn_threshold=None,
 
         # ── Warning threshold ─────────────────────────────────────────────
         if total_cost / budget >= warn_threshold and remaining > 0:
-            job_lines = [f"  {'Instance':<25} {'InstanceID':<22} {'Type':<20} {'Elapsed':>9} {'Live Cost':>10}"]
-            job_lines.append("  " + "-" * 90)
+            job_lines = [f"  {'User':<15} {'Instance':<25} {'InstanceID':<22} {'Type':<20} {'Elapsed':>9} {'Live Cost':>10}"]
+            job_lines.append("  " + "-" * 105)
             for (name, iid, itype, elapsed_h, live_cost) in running_rows:
                 h = int(elapsed_h)
                 m = int((elapsed_h - h) * 60)
                 job_lines.append(
-                    f"  {name:<25} {iid:<22} {itype:<20} {h:>5}h{m:02d}m  ${live_cost:>8.4f}")
+                    f"  {user_name:<15} {name:<25} {iid:<22} {itype:<20} {h:>5}h{m:02d}m  ${live_cost:>8.4f}")
 
             logger.warning(
                 f"BUDGET WARNING [{account_name}] user={user_name}  "
