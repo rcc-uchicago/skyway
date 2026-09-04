@@ -540,14 +540,9 @@ class OCI(Cloud):
                 instance_unit_cost = self.get_unit_price_instance(instance)
                 running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
 
-                args = {
-                    'preserve_boot_volume': True,
-                    'preserve_data_volumes_created_at_launch': True,
-                }
-
-                self.compute_client_composite_operations.stop_instance_and_wait_for_state(
+                self.compute_client_composite_operations.instance_action_and_wait_for_state(
                     instance.id,
-                    operation_kwargs=args,
+                    'STOP',
                     wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_STOPPED]
                 )
 
@@ -639,15 +634,10 @@ class OCI(Cloud):
 
                 print(Fore.BLUE + f"Starting an instance ...\n", end=" ")
 
-                args = {
-                    'preserve_boot_volume': True,
-                    'preserve_data_volumes_created_at_launch': True,
-                }
-
-                self.compute_client_composite_operations.start_instance_and_wait_for_state(
+                self.compute_client_composite_operations.instance_action_and_wait_for_state(
                     instance.id,
-                    operation_kwargs=args,
-                    wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_STOPPED]
+                    'START',
+                    wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_RUNNING]
                 )
 
                 # record the new session before the SSH step, so the session is
