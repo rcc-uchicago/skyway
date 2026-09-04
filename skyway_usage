@@ -56,16 +56,14 @@ if __name__ == "__main__":
 
     colorama.init(autoreset=True)
 
-    default_user = os.environ['USER']
+    msg = "Skyway usage of a cloud account by users and by jobs"
 
-    msg = "Skyway usage of a user"
-    
     parser = argparse.ArgumentParser(description=msg)
-    parser.add_argument('-u', '--user',  dest='username', default=default_user, help="User name")
+    parser.add_argument('-u', '--user',  dest='username', default=None, help="User name (default: all users in the account)")
     parser.add_argument('-A', '--account', dest='account', default="", help="Account name")
     parser.add_argument('--byjob', dest='byjob', action='store_true', default=False, help="Show jobs if specified")
     parser.add_argument('--provider', dest='provider', default="", help="Vendor name: AWS, GCP, Azure, or RCC Midway")
-    
+
     args = parser.parse_args()
 
     user_name = args.username
@@ -96,23 +94,31 @@ if __name__ == "__main__":
     # create an instance descriptor (like with the dashboard)
     instanceDescriptor = InstanceDescriptor("", account_name, "", "", vendor_name)
 
-    # usage
-    headers=["User", 'Allocation', 'Usage', 'Running', 'Balance']
-    user_budget, usage, running_cost, balance = instanceDescriptor.getUsage(user_name)
+    # determine which users to display
+    if user_name is not None:
+        users_to_show = [user_name]
+    else:
+        users_to_show = list(instanceDescriptor.account.users.keys())
 
-    data = [[user_name, user_budget, f"${usage:.4f}", f"${running_cost:.4f}", f"${balance:.4f}"]]
+    # usage
+    headers = ["User", 'Allocation', 'Usage', 'Running', 'Balance']
+    data = []
+    for uname in users_to_show:
+        user_budget, usage, running_cost, balance = instanceDescriptor.getUsage(uname)
+        data.append([uname, user_budget, f"${usage:.4f}", f"${running_cost:.4f}", f"${balance:.4f}"])
     print(tabulate(data, headers=headers))
 
     if byjob == True:
-        df = instanceDescriptor.getUsageHistory(user_name)
+        for uname in users_to_show:
+            df = instanceDescriptor.getUsageHistory(uname)
 
-        if df.empty == True:
-            headers = ['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance']
-            print(tabulate([], headers=headers))
-            print("")
-        else:
-            headers = ['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance']
-            print(df)
+            if df.empty == True:
+                headers = ['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance']
+                print(tabulate([], headers=headers))
+                print("")
+            else:
+                headers = ['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance']
+                print(df)
 
     print("NOTE:")
     print("  + Running: live cost of currently active instances.")
