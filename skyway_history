@@ -166,8 +166,24 @@ def _amend(account, vendor_name, instance_id, user_name, dry_run):
         max_end = None
         print(f"Instance '{instance_id}' has no PKL entries at all.")
     else:
-        ends = pd.to_datetime(df_inst['End'], errors='coerce', utc=True)
-        max_end = ends.dropna().max()
+        # Stored timestamps are heterogeneous (offset with/without colon,
+        # 3- or 6-digit fractional seconds), so parse per-value rather than
+        # assuming a single format.
+        ends = pd.to_datetime(df_inst['End'], format='mixed', utc=True,
+                              errors='coerce')
+        n_bad = int(ends.isna().sum())
+        if n_bad:
+            print(f"WARNING: {n_bad} of {len(ends)} End value(s) for this "
+                  f"instance could not be parsed.")
+        ends = ends.dropna()
+        if ends.empty:
+            # Rows exist but none has a usable End: refuse to guess, since
+            # amending here could double-count an already-recorded session.
+            print(f"ERROR: '{instance_id}' has {len(df_inst)} PKL row(s) but no "
+                  f"parseable End timestamp. Inspect them manually before amending:")
+            print(df_inst.to_string(index=False))
+            sys.exit(1)
+        max_end = ends.max()
         print(f"Most recent PKL End for '{instance_id}': {max_end}")
 
     print(f"API last start time:                        {last_start}")
