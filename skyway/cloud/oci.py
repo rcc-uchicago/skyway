@@ -286,7 +286,7 @@ class OCI(Cloud):
         if os.path.isfile(self.usage_history):
             df = pd.read_pickle(self.usage_history)
         else:
-            df = pd.DataFrame([], columns=['Name','User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
+            df = pd.DataFrame([], columns=['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
 
         df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
         df.to_pickle(self.usage_history)
@@ -492,12 +492,16 @@ class OCI(Cloud):
                 if os.path.isfile(self.usage_history):
                     df = pd.read_pickle(self.usage_history)
                 else:
-                    df = pd.DataFrame([], columns=['Name','User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
+                    df = pd.DataFrame([], columns=['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
 
                 if instance.id not in df['InstanceID'].values:
                     df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
                 else:
-                    df.loc[df['InstanceID'] == instance.id, 'End'] = end_time
+                    # restart_nodes prepends one row per session, so the first
+                    # match is the newest; close only that one out and leave the
+                    # earlier sessions' timestamps intact
+                    first_found_idx = df[df['InstanceID'] == instance.id].index[0]
+                    self._close_usage_row(df, first_found_idx, end_time, instance_unit_cost)
                 df.to_pickle(self.usage_history)
 
     def stop_nodes(self, IDs=[], node_names=[], need_confirmation=True):
@@ -562,12 +566,16 @@ class OCI(Cloud):
                 if os.path.isfile(self.usage_history):
                     df = pd.read_pickle(self.usage_history)
                 else:
-                    df = pd.DataFrame([], columns=['Name','User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
+                    df = pd.DataFrame([], columns=['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
 
                 if instance.id not in df['InstanceID'].values:
                     df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
                 else:
-                    df.loc[df['InstanceID'] == instance.id, 'End'] = end_time
+                    # restart_nodes prepends one row per session, so the first
+                    # match is the newest; close only that one out and leave the
+                    # earlier sessions' timestamps intact
+                    first_found_idx = df[df['InstanceID'] == instance.id].index[0]
+                    self._close_usage_row(df, first_found_idx, end_time, instance_unit_cost)
                 df.to_pickle(self.usage_history)
 
         
@@ -642,6 +650,25 @@ class OCI(Cloud):
                     wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_STOPPED]
                 )
 
+                # record the new session before the SSH step, so the session is
+                # accounted for even if scheduling the shutdown fails
+                current_time = datetime.now(timezone.utc)
+                session_end = current_time + timedelta(hours=walltime_hours)
+
+                data = [user_name, instance.id, instance.shape,
+                        current_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z'),
+                        session_end.strftime('%Y-%m-%dT%H:%M:%S.%f%z'),
+                        projected_cost, remaining_balance]
+
+                if os.path.isfile(self.usage_history):
+                    df = pd.read_pickle(self.usage_history)
+                else:
+                    df = pd.DataFrame([], columns=['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
+
+                # prepend so this session is the first match for this instance ID
+                df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
+                df.to_pickle(self.usage_history)
+
                 time.sleep(30)
 
                 # make sure to shutdown the instance after the walltime (in minutes)
@@ -653,29 +680,6 @@ class OCI(Cloud):
                 print("To connect to the instance, run:")
                 print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{public_ip_address} or")
                 print(f"  skyway_connect --account={self.account_name} -J {instance.display_name}")
-
-                # record the running time and cost
-                end_time = datetime.now(timezone.utc)
-                running_time = end_time - instance.time_created
-                instance_unit_cost = self.get_unit_price_instance(instance)
-                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
-                usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
-
-                # store the record into the database
-                instance_type = instance.shape
-                data = [user_name, instance.id, instance_type,
-                        instance.time_created, end_time, running_cost, remaining_balance]
-
-                if os.path.isfile(self.usage_history):
-                    df = pd.read_pickle(self.usage_history)
-                else:
-                    df = pd.DataFrame([], columns=['Name','User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
-
-                if instance.id not in df['InstanceID'].values:
-                    df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
-                else:
-                    df.loc[df['InstanceID'] == instance.id, 'End'] = end_time
-                df.to_pickle(self.usage_history)
 
     def check_valid_user(self, user_name, verbose=False):
         if user_name not in self.users:

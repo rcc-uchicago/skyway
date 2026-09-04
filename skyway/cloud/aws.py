@@ -518,7 +518,11 @@ class AWS(Cloud):
                 if instance.instance_id not in df['InstanceID'].values:
                     df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
                 else:
-                    df.loc[df['InstanceID'] == instance.instance_id, 'End'] = end_time
+                    # restart_nodes prepends one row per session, so the first
+                    # match is the newest; close only that one out and leave the
+                    # earlier sessions' timestamps intact
+                    first_found_idx = df[df['InstanceID'] == instance.instance_id].index[0]
+                    self._close_usage_row(df, first_found_idx, end_time, instance_unit_cost)
                 df.to_pickle(self.usage_history)
 
                 instances.append(instance)
@@ -580,7 +584,11 @@ class AWS(Cloud):
                 if instance.instance_id not in df['InstanceID'].values:
                     df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
                 else:
-                    df.loc[df['InstanceID'] == instance.instance_id, 'End'] = end_time
+                    # restart_nodes prepends one row per session, so the first
+                    # match is the newest; close only that one out and leave the
+                    # earlier sessions' timestamps intact
+                    first_found_idx = df[df['InstanceID'] == instance.instance_id].index[0]
+                    self._close_usage_row(df, first_found_idx, end_time, instance_unit_cost)
                 df.to_pickle(self.usage_history)
 
                 instances.append(instance)
@@ -654,6 +662,25 @@ class AWS(Cloud):
                 instance.wait_until_running()
 
                 node_name = self.get_instance_name(instance)
+
+                # record the new session before the SSH step, so the session is
+                # accounted for even if scheduling the shutdown fails
+                current_time = datetime.now(timezone.utc)
+                session_end = current_time + timedelta(hours=walltime_hours)
+                data = [instance_user_name, instance.instance_id, instance.instance_type,
+                        current_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z'),
+                        session_end.strftime('%Y-%m-%dT%H:%M:%S.%f%z'),
+                        projected_cost, remaining_balance]
+
+                if os.path.isfile(self.usage_history):
+                    df = pd.read_pickle(self.usage_history)
+                else:
+                    df = pd.DataFrame([], columns=['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
+
+                # prepend so this session is the first match for this instance ID
+                df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
+                df.to_pickle(self.usage_history)
+
                 time.sleep(30)
 
                 # make sure to shutdown the instance after the walltime (in minutes)
