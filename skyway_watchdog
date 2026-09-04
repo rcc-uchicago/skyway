@@ -149,7 +149,7 @@ def _make_account(account_name, vendor_name):
     return None
 
 
-def check_account(account_name, vendor_name, warn_threshold=0.90,
+def check_account(account_name, vendor_name, warn_threshold=None,
                   dry_run=False, logger=None):
     if logger is None:
         logger = logging.getLogger(__name__)
@@ -158,6 +158,11 @@ def check_account(account_name, vendor_name, warn_threshold=0.90,
     if account is None:
         logger.warning(f"Vendor '{vendor_name}' not supported; skipping {account_name}")
         return
+
+    # Use the threshold from cloud.yaml unless the caller explicitly overrides it
+    if warn_threshold is None:
+        warn_threshold = account.get_warning_threshold()
+    logger.debug(f"{account_name}: warning threshold = {warn_threshold*100:.0f}%")
 
     # Collect all running instances grouped by user
     user_instances = {}  # user_name -> [(instance, name, id, type, launch_time)]
@@ -272,8 +277,8 @@ if __name__ == '__main__':
     parser.add_argument('--provider', dest='provider', default='',
                         help="Limit to one vendor: aws, azure, gcp, or oci")
     parser.add_argument('--warn-threshold', dest='warn_threshold', type=float,
-                        default=0.90,
-                        help="Fraction of budget that triggers a warning (default: 0.90)")
+                        default=None,
+                        help="Override the warning threshold from cloud.yaml (fraction, e.g. 0.80)")
     parser.add_argument('--dry-run', dest='dry_run', action='store_true', default=False,
                         help="Report over-budget instances without terminating them")
     args = parser.parse_args()

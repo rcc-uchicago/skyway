@@ -37,6 +37,18 @@ class Cloud():
 
     # account info
 
+    def get_warning_threshold(self):
+        """Return the budget warning threshold as a fraction (0.0–1.0).
+
+        Reads 'warning_threshold' (a percentage integer, e.g. 90) from the
+        vendor section of cloud.yaml.  Falls back to 0.90 if the key is
+        absent or empty.
+        """
+        raw = self.vendor.get('warning_threshold', None)
+        if raw is None or raw == '':
+            return 0.90
+        return min(float(raw), 0.99)
+
     def check_valid_user(self, user_name, verbose=False):
         '''
         check if a user name is in the cloud account
