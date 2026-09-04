@@ -56,7 +56,8 @@ class AWS(Cloud):
         for k, v in account_cfg.items():
             setattr(self, k.replace('-','_'), v)
 
-        self.usage_history = f"{account_path}usage-{account}.pkl"
+        _hist_dir = self.account.get('usage_history_path') or account_path
+        self.usage_history = os.path.join(_hist_dir, f"usage-{account}.pkl")
 
         # load cloud.yaml under $SKYWAYROOT/etc/
         cloud_path = os.environ['SKYWAYROOT'] + '/etc/'

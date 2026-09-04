@@ -71,7 +71,8 @@ class AZURE(Cloud):
 
         self.private_key_file = account_path + self.account['private_key']
 
-        self.usage_history = f"{account_path}usage-{account}.pkl"
+        _hist_dir = self.account.get('usage_history_path') or account_path
+        self.usage_history = os.path.join(_hist_dir, f"usage-{account}.pkl")
 
         # load cloud.yaml under $SKYWAYROOT/etc/
         cloud_path = os.environ['SKYWAYROOT'] + '/etc/'

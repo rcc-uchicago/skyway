@@ -68,7 +68,8 @@ class OCI(Cloud):
         self.compute_client = oci.core.ComputeClient(self.config)
         self.compute_client_composite_operations = oci.core.ComputeClientCompositeOperations(self.compute_client)
 
-        self.usage_history = f"{account_path}usage-{account}.pkl"
+        _hist_dir = self.account.get('usage_history_path') or account_path
+        self.usage_history = os.path.join(_hist_dir, f"usage-{account}.pkl")
 
         # load cloud.yaml under $SKYWAYROOT/etc/
         cloud_path = os.environ['SKYWAYROOT'] + '/etc/'
