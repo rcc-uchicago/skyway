@@ -182,6 +182,36 @@ class GCP(Cloud):
         history = df_user[['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance']]
         return history
 
+    def _close_usage_row(self, df, idx, end_time, unit_price):
+        """
+        Close out an existing usage row: set End and recompute Cost from the
+        row's recorded Start, so the ledger holds actual runtime instead of the
+        projection written at launch. Balance is refreshed to stay consistent
+        with the corrected Cost. Cost is left untouched if Start cannot be
+        parsed or would imply negative runtime.
+        """
+        df.loc[idx, 'End'] = end_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+
+        instance_id = df.loc[idx, 'InstanceID']
+        # Stored timestamps vary (offset with/without colon, 3- or 6-digit
+        # fractional seconds), so let pandas infer instead of pinning a format.
+        start_time = pd.to_datetime(df.loc[idx, 'Start'], utc=True, errors='coerce')
+        if pd.isna(start_time):
+            print(f"WARNING: cannot parse Start for {instance_id}; keeping projected cost.")
+            return
+
+        elapsed_hours = (end_time - start_time.to_pydatetime()).total_seconds() / 3600.0
+        if elapsed_hours < 0:
+            print(f"WARNING: Start of {instance_id} is after End; keeping projected cost.")
+            return
+
+        df.loc[idx, 'Cost'] = elapsed_hours * unit_price
+
+        row_user = df.loc[idx, 'User']
+        if row_user in self.users:
+            accumulated = df.loc[df['User'] == row_user].astype({'Cost': float})['Cost'].sum()
+            df.loc[idx, 'Balance'] = float(self.users[row_user]['budget']) - accumulated
+
     def get_node_types(self):
         """
         List all the node (instance) types provided by the vendor and their unit prices
@@ -746,7 +776,7 @@ class GCP(Cloud):
                     # since restart_nodes() prepends to the database with instance ID every time
                     # finds the first row with instance ID to set the end time
                     first_found_idx = df[df['InstanceID'] == node.id].index[0]
-                    df.loc[first_found_idx, 'End'] = current_time_str
+                    self._close_usage_row(df, first_found_idx, current_time, instance_unit_cost)
                 df.to_pickle(self.usage_history)
 
         if self.tpu_client is not None:
@@ -784,7 +814,7 @@ class GCP(Cloud):
                     df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
                 else:
                     first_found_idx = df[df['InstanceID'] == tpu_node.name].index[0]
-                    df.loc[first_found_idx, 'End'] = current_time_str
+                    self._close_usage_row(df, first_found_idx, current_time, instance_unit_cost)
                 df.to_pickle(self.usage_history)
 
     def restart_nodes(self, IDs=[], node_names=[], need_confirmation=True, walltime = None):
@@ -1096,7 +1126,7 @@ class GCP(Cloud):
                     # since restart_nodes() prepends to the database with instance ID every time
                     # finds the first row with instance ID to set the end time
                     first_found_idx = df[df['InstanceID'] == node.id].index[0]
-                    df.loc[first_found_idx, 'End'] = current_time_str
+                    self._close_usage_row(df, first_found_idx, current_time, instance_unit_cost)
 
                 df.to_pickle(self.usage_history)
 
@@ -1135,7 +1165,7 @@ class GCP(Cloud):
                     df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
                 else:
                     first_found_idx = df[df['InstanceID'] == tpu_node.name].index[0]
-                    df.loc[first_found_idx, 'End'] = current_time_str
+                    self._close_usage_row(df, first_found_idx, current_time, instance_unit_cost)
                 df.to_pickle(self.usage_history)
 
 
