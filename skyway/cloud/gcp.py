@@ -322,10 +322,13 @@ class GCP(Cloud):
                     # finds the first row with instance ID to find its start time
                     df_node = df.loc[df['InstanceID'] == node.id]
                     if df_node.empty:
-                        continue
-                    first_found_idx = df_node.index[0]
-                    start_time = pd.to_datetime(df.loc[first_found_idx, 'Start'], format='%Y-%m-%dT%H:%M:%S.%f%z')
-                    running_time = current_time - start_time #creation_time
+                        # instance not in PKL (launched outside Skyway or missing entry);
+                        # fall back to the API creation time so it still appears in the list
+                        start_time = creation_time
+                    else:
+                        first_found_idx = df_node.index[0]
+                        start_time = pd.to_datetime(df.loc[first_found_idx, 'Start'], format='%Y-%m-%dT%H:%M:%S.%f%z')
+                    running_time = current_time - start_time
                 else:
                     df_node = df.loc[df['InstanceID'] == node.id]
                     if df_node.empty == False:
@@ -358,9 +361,10 @@ class GCP(Cloud):
                 if state_str == 'running':
                     df_node = df.loc[df['InstanceID'] == tpu_node.name]
                     if df_node.empty:
-                        continue
-                    first_found_idx = df_node.index[0]
-                    start_time = pd.to_datetime(df.loc[first_found_idx, 'Start'], format='%Y-%m-%dT%H:%M:%S.%f%z')
+                        start_time = tpu_node.create_time
+                    else:
+                        first_found_idx = df_node.index[0]
+                        start_time = pd.to_datetime(df.loc[first_found_idx, 'Start'], format='%Y-%m-%dT%H:%M:%S.%f%z')
                     running_time = current_time - start_time
                 else:
                     df_node = df.loc[df['InstanceID'] == tpu_node.name]
@@ -850,6 +854,28 @@ class GCP(Cloud):
                 current_time = datetime.now(local_tz)
                 current_time_str = current_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
 
+                running_time = timedelta(hours=walltime_hours)
+                instance_unit_cost = self.get_unit_price_instance(node)
+                projected_running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
+                usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
+                end_time = current_time + running_time
+                end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+
+                # store the record into the database before SSH so the session
+                # is always recorded even if the SSH step fails
+                data = [user_name, node.id, node.size,
+                        current_time_str, end_time_str, projected_running_cost, remaining_balance]
+
+                if os.path.isfile(self.usage_history):
+                    df = pd.read_pickle(self.usage_history)
+                else:
+                    df = pd.DataFrame([], columns=['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
+
+                # prepend the database with the new session of this instance ID
+                # meaning that there are duplicated instance IDs in the database (intentionally)
+                df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
+                df.to_pickle(self.usage_history)
+
                 time.sleep(30)
 
                 # make sure to shutdown the instance after the walltime (in minutes)
@@ -873,27 +899,6 @@ class GCP(Cloud):
                 print("To connect to the instance, run:")
                 print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{node.public_ips[0]} or")
                 print(f"  skyway_connect --account={self.account_name} -J {node.name}")
-
-                running_time = timedelta(hours=walltime_hours)
-                instance_unit_cost = self.get_unit_price_instance(node)
-                projected_running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
-                usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
-                end_time = current_time + running_time
-                end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
-
-                # store the record into the database
-                data = [user_name, node.id, node.size,
-                        current_time_str, end_time_str, projected_running_cost, remaining_balance]
-
-                if os.path.isfile(self.usage_history):
-                    df = pd.read_pickle(self.usage_history)
-                else:
-                    df = pd.DataFrame([], columns=['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
-
-                # prepend the database with the new session of this instance ID
-                # meaning that there are duplicated instance IDs in the database (intentionally)
-                df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
-                df.to_pickle(self.usage_history)
 
         if self.tpu_client is not None:
             for tpu_node in self._list_tpu_nodes():
