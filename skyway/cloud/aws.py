@@ -484,6 +484,11 @@ class AWS(Cloud):
                 check_id = instance_id in IDs
 
             if check_nodename or check_id:
+                # A stopped instance was already accounted for when it stopped;
+                # closing its usage row here would backdate End to the terminate
+                # and bill every idle hour in between.
+                was_running = instance.state['Name'] == 'running'
+
                 running_time = datetime.now(timezone.utc) - instance.launch_time
                 instance_unit_cost = self.get_unit_price_instance(instance)
                 running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
@@ -492,13 +497,20 @@ class AWS(Cloud):
                     print(f"Cannot destroy an instance {instance_name} created by other users")
                     continue
 
-                if need_confirmation == True: 
-                    response = input(f"Do you want to terminate the node {instance_name} {instance_id} (running cost ${running_cost:0.5f})? NOTE: Data on the node will be removed. (y/n) ")
+                if need_confirmation == True:
+                    cost_note = f" (running cost ${running_cost:0.5f})" if was_running \
+                        else " (already stopped, no additional cost)"
+                    response = input(f"Do you want to terminate the node {instance_name} {instance_id}{cost_note}? NOTE: Data on the node will be removed. (y/n) ")
                     if response != 'y':
                         continue
 
                 instance.terminate()
-   
+
+                if not was_running:
+                    print(f"{instance_name} was already stopped; usage history left unchanged.")
+                    instances.append(instance)
+                    continue
+
                 # record the running time and cost
                 end_time = datetime.now(timezone.utc)
                 running_time = end_time - instance.launch_time

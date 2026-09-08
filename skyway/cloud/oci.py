@@ -458,11 +458,18 @@ class OCI(Cloud):
                     print(f"Cannot terminate an instance {instance.display_name} created by other users")
                     continue
 
+                # A stopped instance was already accounted for when it stopped;
+                # closing its usage row here would backdate End to the terminate
+                # and bill every idle hour in between.
+                was_running = instance.lifecycle_state == 'RUNNING'
+
                 running_time = datetime.now(timezone.utc) - instance.time_created
                 instance_unit_cost = self.get_unit_price_instance(instance)
                 running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
 
-                response = input(f"Do you want to terminate the node {instance.id} (running cost ${running_cost:0.5f})? NOTE: Data on the node will be removed. (y/n) ")
+                cost_note = f" (running cost ${running_cost:0.5f})" if was_running \
+                    else " (already stopped, no additional cost)"
+                response = input(f"Do you want to terminate the node {instance.id}{cost_note}? NOTE: Data on the node will be removed. (y/n) ")
                 if response != 'y':
                     continue
 
@@ -476,6 +483,11 @@ class OCI(Cloud):
                     operation_kwargs=args,
                     wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_TERMINATED]
                 )
+
+                if not was_running:
+                    print(f"{instance.display_name} was already stopped; "
+                          f"usage history left unchanged.")
+                    continue
 
                 # record the running time and cost
                 end_time = datetime.now(timezone.utc)

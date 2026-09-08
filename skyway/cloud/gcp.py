@@ -1059,6 +1059,13 @@ class GCP(Cloud):
                     print(f"Cannot destroy an instance {node.name} created by other users")
                     continue
 
+                # Whether the instance is still burning time decides if this
+                # destroy has anything to bill. A node that is already stopped
+                # was accounted for when it stopped (by stop_nodes, or by its
+                # own shutdown timer), so closing its usage row here would
+                # backdate End to the destroy and bill every idle hour since.
+                was_running = node.state == "running"
+
                 creation_time_str = node.extra.get('creationTimestamp')  # GCP
                 # Convert the creation time from string to datetime object
                 creation_time = datetime.strptime(creation_time_str, '%Y-%m-%dT%H:%M:%S.%f%z')
@@ -1068,11 +1075,18 @@ class GCP(Cloud):
                 running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
 
                 if need_confirmation == True:
-                    response = input(f"Do you want to destroy {node.name} (running cost ${running_cost})? NOTE: Data on the node will be removed. (y/n) ")
+                    prompt = f"Do you want to destroy {node.name}"
+                    prompt += f" (running cost ${running_cost})" if was_running \
+                        else " (already stopped, no additional cost)"
+                    response = input(f"{prompt}? NOTE: Data on the node will be removed. (y/n) ")
                     if response != 'y':
                         continue
 
                 self.driver.destroy_node(node)
+
+                if not was_running:
+                    print(f"{node.name} was already stopped; usage history left unchanged.")
+                    continue
 
                 # record the running time and cost
                 running_time = current_time - creation_time
@@ -1112,16 +1126,25 @@ class GCP(Cloud):
                 if node_user_name != user_name:
                     print(f"Cannot destroy an instance {short_name} created by other users")
                     continue
+                # see the GCE branch above: destroying an already-stopped node
+                # must not reopen and backdate its usage row
+                was_running = self._tpu_state_str(tpu_node) == 'running'
                 creation_time = tpu_node.create_time
                 current_time = datetime.now(timezone.utc)
                 running_time = current_time - creation_time
                 instance_unit_cost = self.get_unit_price_instance(tpu_node)
                 running_cost = running_time.total_seconds() / 3600.0 * instance_unit_cost
                 if need_confirmation:
-                    response = input(f"Do you want to destroy {short_name} (running cost ${running_cost:.3f})? NOTE: Data on the node will be removed. (y/n) ")
+                    prompt = f"Do you want to destroy {short_name}"
+                    prompt += f" (running cost ${running_cost:.3f})" if was_running \
+                        else " (already stopped, no additional cost)"
+                    response = input(f"{prompt}? NOTE: Data on the node will be removed. (y/n) ")
                     if response != 'y':
                         continue
                 self._destroy_tpu_node(short_name, tpu_zone)
+                if not was_running:
+                    print(f"{short_name} was already stopped; usage history left unchanged.")
+                    continue
                 creation_time_str = creation_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
                 current_time_str = current_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
                 usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
