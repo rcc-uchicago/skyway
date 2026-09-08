@@ -1,19 +1,29 @@
 #!/usr/bin/env python
 """
-skyway_history - Show per-job usage history and amend missing PKL entries.
+skyway_history - Show per-job usage history, amend missing PKL entries, and
+repair costs left at their launch-time projection.
 
 Usage:
   skyway_history -A rcc-gcp -u username
   skyway_history -A rcc-gcp -u username --amend INSTANCE_ID [--dry-run]
+  skyway_history -A rcc-gcp -u username --repair-cost [--apply]
 
 The --amend flag detects whether the instance has an unrecorded session
 (i.e., it was restarted after the last PKL entry) and prepends the missing row.
 The cost written reflects elapsed time since the last restart; stop_nodes or
 destroy_nodes will overwrite the End timestamp when the instance is eventually
 stopped, but Cost stays fixed (matching the rest of the accounting design).
+
+The --repair-cost flag reconciles rows written before Cloud._close_usage_row()
+existed. Back then create_nodes() wrote Cost as a projection
+(walltime x unit price), and stop_nodes/destroy_nodes overwrote End without
+recomputing Cost -- so short jobs were over-charged and overruns under-charged.
+Repair is dry-run unless --apply is given; see _repair_cost() for how rows are
+classified and which ones are deliberately left alone.
 """
 import argparse
 import os
+import shutil
 import sys
 from datetime import datetime, timezone
 
@@ -238,6 +248,243 @@ def _amend(account, vendor_name, instance_id, user_name, dry_run):
     print(f"Done. PKL updated: {account.usage_history}")
 
 
+# --- cost repair ---------------------------------------------------------
+
+# Cost is stored to full float precision, so anything beyond rounding noise on
+# a sub-cent job is a genuine mismatch.
+COST_TOLERANCE = 0.005
+
+# Walltime always comes from parse_walltime(), which returns total_minutes/60.
+# A stale projection therefore satisfies Cost == (whole minutes / 60) * price.
+# Allow half a second of slack for float round-tripping.
+MINUTE_EPSILON = 0.01
+
+# create_nodes() schedules `shutdown -P +walltime` on the instance, so a row
+# whose End implies it ran far past its own walltime points at a bad End
+# timestamp rather than a real overrun. Repairing those would bill the user for
+# time the shutdown timer says they could not have used.
+SUSPECT_RUNTIME_FACTOR = 2.0
+
+
+def _classify_row(row, unit_price):
+    """
+    Decide what to do with one usage row.
+
+    Returns (status, info) where info carries whatever the caller needs to
+    report or repair. Statuses:
+      'consistent'    Cost already equals elapsed x unit_price -- nothing to do.
+      'stale'         Cost is a launch-time projection (a whole-minute walltime
+                      at the current unit price) that survived the End rewrite.
+      'suspect'       Same as 'stale', but the recorded runtime overshoots the
+                      implied walltime by more than SUSPECT_RUNTIME_FACTOR, so
+                      the End timestamp itself is doubtful.
+      'ambiguous'     Cost disagrees with elapsed x unit_price but is not a
+                      whole-minute projection either -- most likely the unit
+                      price in cloud.yaml changed since this job ran.
+      'no-price'      Instance type is not in cloud.yaml (or is a placeholder).
+      'bad-time'      Start or End cannot be parsed, or End precedes Start.
+    """
+    if unit_price is None or unit_price <= 0:
+        return 'no-price', {}
+
+    start = pd.to_datetime(row['Start'], format='mixed', utc=True, errors='coerce')
+    end = pd.to_datetime(row['End'], format='mixed', utc=True, errors='coerce')
+    if pd.isna(start) or pd.isna(end) or end < start:
+        return 'bad-time', {}
+
+    try:
+        old_cost = float(row['Cost'])
+    except (TypeError, ValueError):
+        return 'bad-time', {}
+    if pd.isna(old_cost):
+        return 'bad-time', {}
+
+    elapsed_h = (end - start).total_seconds() / 3600.0
+    new_cost = elapsed_h * unit_price
+    info = {'start': start, 'end': end, 'elapsed_h': elapsed_h,
+            'old_cost': old_cost, 'new_cost': new_cost,
+            'delta': new_cost - old_cost}
+
+    if abs(new_cost - old_cost) <= COST_TOLERANCE:
+        return 'consistent', info
+
+    implied_minutes = old_cost / unit_price * 60.0
+    rounded = round(implied_minutes)
+    if rounded < 1 or abs(implied_minutes - rounded) > MINUTE_EPSILON:
+        return 'ambiguous', info
+
+    info['walltime_h'] = rounded / 60.0
+    if elapsed_h > SUSPECT_RUNTIME_FACTOR * info['walltime_h']:
+        return 'suspect', info
+    return 'stale', info
+
+
+def _rebalance_users(df, account, users):
+    """
+    Rewrite the per-row Balance column for the given users as a running ledger
+    in chronological order: budget - cumulative Cost. Returns the number of
+    rows updated.
+
+    Destructive to history: the Balance column otherwise records the balance as
+    it stood when each row was written, so a mid-history budget increase shows
+    up as an upward jump. Rebuilding from today's budget flattens that away.
+    """
+    updated = 0
+    order = pd.to_datetime(df['Start'], format='mixed', utc=True, errors='coerce')
+    for user in users:
+        if user not in account.users:
+            print(f"  skipping rebalance for '{user}': not in this account's user list")
+            continue
+        budget = float(account.users[user]['budget'])
+        mask = (df['User'] == user) & order.notna()
+        running = 0.0
+        for idx in order[mask].sort_values().index:
+            try:
+                cost = float(df.loc[idx, 'Cost'])
+            except (TypeError, ValueError):
+                cost = float('nan')
+            if pd.isna(cost):
+                # A single unusable Cost would poison every later balance.
+                print(f"  {user}: row {idx} has an unusable Cost; "
+                      f"Balance left untouched from here on")
+                break
+            running += cost
+            df.loc[idx, 'Balance'] = budget - running
+            updated += 1
+        n_skipped = int(((df['User'] == user) & order.isna()).sum())
+        if n_skipped:
+            print(f"  {user}: {n_skipped} row(s) with an unparseable Start left untouched")
+    return updated
+
+
+def _repair_cost(account, user_name, all_users, instance_id, include_suspect,
+                 rebalance, apply_changes, assume_yes):
+    df = _load_pkl(account)
+    if df.empty:
+        print("Usage history is empty — nothing to repair.")
+        return
+
+    mask = pd.Series(True, index=df.index)
+    if not all_users:
+        mask &= df['User'] == user_name
+    if instance_id:
+        mask &= df['InstanceID'].astype(str) == str(instance_id)
+    targets = df.index[mask]
+    if len(targets) == 0:
+        print("No rows matched the given user/instance filter.")
+        return
+
+    scope = "all users" if all_users else f"user '{user_name}'"
+    if instance_id:
+        scope += f", instance '{instance_id}'"
+    print(f"Auditing {len(targets)} row(s) in {account.usage_history} ({scope})\n")
+
+    buckets = {k: [] for k in ('consistent', 'stale', 'suspect', 'ambiguous',
+                               'no-price', 'bad-time')}
+    for idx in targets:
+        row = df.loc[idx]
+        price = account.get_unit_price_by_name(row['InstanceType'])
+        status, info = _classify_row(row, price)
+        buckets[status].append((idx, row, price, info))
+
+    def _table(entries):
+        rows = []
+        for idx, row, price, info in entries:
+            rows.append([idx, row['User'], str(row['InstanceID'])[:20],
+                         row['InstanceType'],
+                         info['start'].strftime('%Y-%m-%d %H:%M'),
+                         info.get('walltime_h', float('nan')),
+                         info['elapsed_h'], price,
+                         info['old_cost'], info['new_cost'], info['delta']])
+        return tabulate(rows, headers=['idx', 'User', 'InstanceID', 'Type',
+                                       'Start (UTC)', 'Walltime_h', 'Actual_h',
+                                       '$/h', 'OldCost', 'NewCost', 'Delta'],
+                        floatfmt='.4f')
+
+    to_repair = list(buckets['stale'])
+    if include_suspect:
+        to_repair += buckets['suspect']
+
+    if buckets['stale']:
+        print(f"Stale launch-time projections ({len(buckets['stale'])}) — will be repaired:")
+        print(_table(buckets['stale']))
+        print("")
+
+    if buckets['suspect']:
+        verb = "will be repaired (--include-suspect)" if include_suspect \
+            else "NOT repaired (pass --include-suspect to include them)"
+        print(f"Suspect runtime ({len(buckets['suspect'])}) — recorded runtime exceeds "
+              f"{SUSPECT_RUNTIME_FACTOR:g}x the walltime the projection implies, so the "
+              f"End timestamp is questionable; {verb}:")
+        print(_table(buckets['suspect']))
+        print("")
+
+    if buckets['ambiguous']:
+        print(f"Ambiguous ({len(buckets['ambiguous'])}) — Cost does not match elapsed x "
+              f"today's price, and is not a whole-minute projection either "
+              f"(the unit price in cloud.yaml has most likely changed since these ran). "
+              f"Left untouched:")
+        print(_table(buckets['ambiguous']))
+        print("")
+
+    for status, label in (('no-price', 'unknown instance type (not in cloud.yaml)'),
+                          ('bad-time', 'unparseable or inverted Start/End')):
+        if buckets[status]:
+            ids = ', '.join(str(r['InstanceID'])[:20] for _, r, _, _ in buckets[status][:10])
+            more = ' ...' if len(buckets[status]) > 10 else ''
+            print(f"Skipped — {label} ({len(buckets[status])}): {ids}{more}\n")
+
+    print(f"Summary: {len(buckets['consistent'])} already consistent, "
+          f"{len(buckets['stale'])} stale, {len(buckets['suspect'])} suspect, "
+          f"{len(buckets['ambiguous'])} ambiguous, "
+          f"{len(buckets['no-price']) + len(buckets['bad-time'])} unusable.")
+
+    if not to_repair:
+        print("\nNothing to repair.")
+        return
+
+    per_user = {}
+    for _, row, _, info in to_repair:
+        per_user[row['User']] = per_user.get(row['User'], 0.0) + info['delta']
+    print("\nNet Cost change per user (negative = user was over-charged):")
+    print(tabulate(sorted(per_user.items()), headers=['User', 'Delta ($)'],
+                   floatfmt='.4f'))
+
+    if not apply_changes:
+        print(f"\n[DRY RUN] {len(to_repair)} row(s) would be rewritten. "
+              f"Re-run with --apply to write.")
+        return
+
+    if not assume_yes:
+        confirm = input(f"\nRewrite Cost on {len(to_repair)} row(s) in "
+                        f"{account.usage_history}? (y/n) ")
+        if confirm.strip().lower() != 'y':
+            print("Aborted — no changes made.")
+            return
+
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    backup = f"{account.usage_history}.bak-{stamp}"
+    shutil.copy2(account.usage_history, backup)
+    print(f"Backup written: {backup}")
+
+    for idx, _, _, info in to_repair:
+        df.loc[idx, 'Cost'] = info['new_cost']
+
+    if rebalance:
+        print("Rebalancing the Balance column (budget - cumulative Cost, "
+              "chronological); this flattens any past budget adjustments:")
+        n = _rebalance_users(df, account, sorted(per_user))
+        print(f"  {n} row(s) rebalanced")
+    else:
+        print("NOTE: the per-row Balance column is a snapshot from when each row "
+              "was written and was left as-is. The balance reported by "
+              "skyway_usage is derived from Cost and is now correct. "
+              "Pass --rebalance to rewrite the column too.")
+
+    df.to_pickle(account.usage_history)
+    print(f"Done. PKL updated: {account.usage_history}")
+
+
 if __name__ == '__main__':
     skywayroot = os.environ.get('SKYWAYROOT', '')
     if not skywayroot:
@@ -256,7 +503,28 @@ if __name__ == '__main__':
                         help="Amend PKL for the given instance ID if a session is missing")
     parser.add_argument('--dry-run', dest='dry_run', action='store_true', default=False,
                         help="Show what would be written without modifying the PKL")
+    parser.add_argument('--repair-cost', dest='repair_cost', action='store_true', default=False,
+                        help="Recompute Cost from Start/End for rows still holding their "
+                             "launch-time projection (dry-run unless --apply)")
+    parser.add_argument('--apply', dest='apply_changes', action='store_true', default=False,
+                        help="With --repair-cost: actually write the repaired rows")
+    parser.add_argument('--yes', dest='assume_yes', action='store_true', default=False,
+                        help="With --repair-cost --apply: skip the confirmation prompt")
+    parser.add_argument('--all-users', dest='all_users', action='store_true', default=False,
+                        help="With --repair-cost: audit every user in the ledger, not just -u")
+    parser.add_argument('--instance', dest='instance_filter', default=None, metavar='INSTANCE_ID',
+                        help="With --repair-cost: restrict the audit to one instance ID")
+    parser.add_argument('--include-suspect', dest='include_suspect', action='store_true',
+                        default=False,
+                        help="With --repair-cost: also repair rows whose recorded runtime "
+                             "far exceeds their walltime (questionable End timestamps)")
+    parser.add_argument('--rebalance', dest='rebalance', action='store_true', default=False,
+                        help="With --repair-cost --apply: also rewrite the per-row Balance "
+                             "column as budget - cumulative Cost")
     args = parser.parse_args()
+
+    if args.repair_cost and args.amend_id:
+        sys.exit("--repair-cost and --amend cannot be combined; run them separately.")
 
     vendor_name = _infer_vendor(args.account, args.provider)
     if vendor_name not in SUPPORTED_VENDORS:
@@ -267,7 +535,12 @@ if __name__ == '__main__':
     if account is None:
         sys.exit(f"Failed to create account object for '{args.account}'.")
 
-    if args.amend_id:
+    if args.repair_cost:
+        _repair_cost(account, args.username, args.all_users, args.instance_filter,
+                     args.include_suspect, args.rebalance,
+                     apply_changes=args.apply_changes and not args.dry_run,
+                     assume_yes=args.assume_yes)
+    elif args.amend_id:
         _amend(account, vendor_name, args.amend_id, args.username, args.dry_run)
     else:
         _show_history(account, args.username)

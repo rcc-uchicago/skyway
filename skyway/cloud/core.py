@@ -100,6 +100,22 @@ class Cloud():
         '''
         pass
 
+    def get_unit_price_by_name(self, instance_type_name):
+        """
+        Look up the per-hour price from the vendor's node-types by the instance
+        type name as recorded in the usage history (e.g. 'a3-megagpu-8g',
+        'c5.4xlarge', 'v6e-8'). Unlike get_unit_price(), which takes a Skyway
+        node-type key such as 'a3mg8', this resolves what the PKL actually
+        stores. Returns -1.0 if the name is unknown.
+        """
+        if not instance_type_name:
+            return -1.0
+        name = str(instance_type_name)
+        for cfg in self.vendor.get('node-types', {}).values():
+            if cfg.get('name') == name or cfg.get('tpu-type') == name:
+                return cfg['price']
+        return -1.0
+
     def _close_usage_row(self, df, idx, end_time, unit_price):
         """
         Close out an existing usage row: set End and recompute Cost from the
