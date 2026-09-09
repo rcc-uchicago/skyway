@@ -373,7 +373,7 @@ def _rebalance_users(df, account, users):
     return updated
 
 
-def _repair_cost(account, user_name, all_users, instance_id, include_suspect,
+def _repair_cost(account, user_name, all_users, instance_id,
                  rebalance, apply_changes, assume_yes):
     df = _load_pkl(account)
     if df.empty:
@@ -418,8 +418,6 @@ def _repair_cost(account, user_name, all_users, instance_id, include_suspect,
                         floatfmt='.4f')
 
     to_repair = list(buckets['stale'])
-    if include_suspect:
-        to_repair += buckets['suspect']
 
     if buckets['stale']:
         print(f"Stale launch-time projections ({len(buckets['stale'])}) — will be repaired:")
@@ -427,11 +425,11 @@ def _repair_cost(account, user_name, all_users, instance_id, include_suspect,
         print("")
 
     if buckets['suspect']:
-        verb = "will be repaired (--include-suspect)" if include_suspect \
-            else "NOT repaired (pass --include-suspect to include them)"
         print(f"Suspect runtime ({len(buckets['suspect'])}) — recorded runtime exceeds "
               f"{SUSPECT_RUNTIME_FACTOR:g}x the walltime the projection implies, so the "
-              f"End timestamp is questionable; {verb}:")
+              f"End timestamp is questionable. Cost is NOT recomputed from it "
+              f"(that would bill the bogus runtime); use --close-at-walltime "
+              f"to repair the End instead:")
         print(_table(buckets['suspect']))
         print("")
 
@@ -493,6 +491,94 @@ def _repair_cost(account, user_name, all_users, instance_id, include_suspect,
               "was written and was left as-is. The balance reported by "
               "skyway_usage is derived from Cost and is now correct. "
               "Pass --rebalance to rewrite the column too.")
+
+    df.to_pickle(account.usage_history)
+    print(f"Done. PKL updated: {account.usage_history}")
+
+
+def _close_at_walltime(account, user_name, all_users, instance_id,
+                       apply_changes, assume_yes):
+    """
+    Repair 'suspect' rows by rewriting End, not Cost.
+
+    A suspect row pairs a launch-time Cost projection with an End that is far
+    past the walltime that projection implies. In practice the End is a
+    batch-close artifact -- a sweep stamped 'now' on every stale row it found,
+    seconds apart -- so the runtime it encodes never happened. Recomputing Cost
+    from it would bill the artifact. The projection is the trustworthy half, so
+    keep it and move End to Start + walltime, which is what the job was
+    scheduled to do and (where cloud data survives to check) what it did.
+
+    Cost is left alone, so balances do not move.
+    """
+    df = _load_pkl(account)
+    if df.empty:
+        print("Usage history is empty — nothing to repair.")
+        return
+
+    mask = pd.Series(True, index=df.index)
+    if not all_users:
+        mask &= df['User'] == user_name
+    if instance_id:
+        mask &= df['InstanceID'].astype(str) == str(instance_id)
+    targets = df.index[mask]
+    if len(targets) == 0:
+        print("No rows matched the given user/instance filter.")
+        return
+
+    scope = "all users" if all_users else f"user '{user_name}'"
+    if instance_id:
+        scope += f", instance '{instance_id}'"
+    print(f"Auditing {len(targets)} row(s) in {account.usage_history} ({scope})\n")
+
+    changed = []
+    for idx in targets:
+        row = df.loc[idx]
+        price = account.get_unit_price_by_name(row['InstanceType'])
+        status, info = _classify_row(row, price)
+        if status != 'suspect':
+            continue
+        new_end = info['start'] + pd.Timedelta(hours=info['walltime_h'])
+        changed.append((idx, row, info, new_end))
+
+    if not changed:
+        print("No suspect rows — nothing to repair.")
+        return
+
+    print(f"Suspect rows ({len(changed)}) — End rewritten to Start + walltime, "
+          f"Cost left as recorded:")
+    print(tabulate(
+        [[idx, row['User'], str(row['InstanceID'])[:20], row['InstanceType'],
+          info['start'].strftime('%Y-%m-%d %H:%M'),
+          info['end'].strftime('%Y-%m-%d %H:%M'),
+          new_end.strftime('%Y-%m-%d %H:%M'),
+          info['elapsed_h'], info['walltime_h'], info['old_cost']]
+         for idx, row, info, new_end in changed],
+        headers=['idx', 'User', 'InstanceID', 'Type', 'Start (UTC)',
+                 'Old End (UTC)', 'New End (UTC)', 'Old_h', 'New_h', 'Cost'],
+        floatfmt='.4f'))
+
+    dropped = sum(i['elapsed_h'] - i['walltime_h'] for _, _, i, _ in changed)
+    print(f"\n{len(changed)} row(s), {dropped:.1f} phantom hour(s) removed. "
+          f"Cost unchanged on every row, so no balance moves.")
+
+    if not apply_changes:
+        print(f"\n[DRY RUN] {len(changed)} row(s) would be rewritten. "
+              f"Re-run with --apply to write.")
+        return
+
+    if not assume_yes:
+        confirm = input(f"\nRewrite End on {len(changed)} row(s) in "
+                        f"{account.usage_history}? (y/n) ")
+        if confirm.strip().lower() != 'y':
+            print("Aborted — no changes made.")
+            return
+
+    _backup_pkl(account)
+
+    fmt = '%Y-%m-%dT%H:%M:%S.%f%z'
+    for idx, _, _, new_end in changed:
+        df.loc[idx, 'End'] = new_end.strftime(fmt)
 
     df.to_pickle(account.usage_history)
     print(f"Done. PKL updated: {account.usage_history}")
@@ -875,10 +961,6 @@ if __name__ == '__main__':
                         help="With --repair-cost: audit every user in the ledger, not just -u")
     parser.add_argument('--instance', dest='instance_filter', default=None, metavar='INSTANCE_ID',
                         help="With --repair-cost: restrict the audit to one instance ID")
-    parser.add_argument('--include-suspect', dest='include_suspect', action='store_true',
-                        default=False,
-                        help="With --repair-cost: also repair rows whose recorded runtime "
-                             "far exceeds their walltime (questionable End timestamps)")
     parser.add_argument('--rebalance', dest='rebalance', action='store_true', default=False,
                         help="With --repair-cost/--from-cloud --apply: also rewrite the "
                              "per-row Balance column as budget - cumulative Cost")
@@ -889,10 +971,15 @@ if __name__ == '__main__':
     parser.add_argument('--add-missing', dest='add_missing', action='store_true', default=False,
                         help="With --from-cloud: also record real sessions that have no "
                              "ledger row at all")
+    parser.add_argument('--close-at-walltime', dest='close_at_walltime',
+                        action='store_true', default=False,
+                        help="Repair suspect rows by rewriting End to Start + walltime "
+                             "and leaving Cost as recorded (dry-run unless --apply)")
     args = parser.parse_args()
 
     modes = [m for m, on in (('--repair-cost', args.repair_cost),
                              ('--from-cloud', args.from_cloud),
+                             ('--close-at-walltime', args.close_at_walltime),
                              ('--amend', bool(args.amend_id))) if on]
     if len(modes) > 1:
         sys.exit(f"{' and '.join(modes)} cannot be combined; run them separately.")
@@ -913,9 +1000,14 @@ if __name__ == '__main__':
                     assume_yes=args.assume_yes)
     elif args.repair_cost:
         _repair_cost(account, args.username, args.all_users, args.instance_filter,
-                     args.include_suspect, args.rebalance,
+                     args.rebalance,
                      apply_changes=args.apply_changes and not args.dry_run,
                      assume_yes=args.assume_yes)
+    elif args.close_at_walltime:
+        _close_at_walltime(account, args.username, args.all_users,
+                           args.instance_filter,
+                           apply_changes=args.apply_changes and not args.dry_run,
+                           assume_yes=args.assume_yes)
     elif args.amend_id:
         _amend(account, vendor_name, args.amend_id, args.username, args.dry_run)
     else:
