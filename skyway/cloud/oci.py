@@ -677,6 +677,14 @@ class OCI(Cloud):
                 public_ip_address = self.get_host_ip(instance.id)
                 cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{public_ip_address} 'sudo shutdown -P +{walltime_in_minutes}' "
                 p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+                if p.returncode != 0:
+                    self._abort_restart_session(
+                        df, unit_price, instance.display_name,
+                        (p.stderr or '').strip() or f"ssh exited {p.returncode}",
+                        lambda: self.compute_client_composite_operations.instance_action_and_wait_for_state(
+                            instance.id, 'STOP',
+                            wait_for_states=[oci.core.models.Instance.LIFECYCLE_STATE_STOPPED]))
+                    continue
 
                 print(f'\nInstance {instance.name} is up.')
                 print("To connect to the instance, run:")

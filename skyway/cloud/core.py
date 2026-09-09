@@ -4,7 +4,7 @@
 # Maintainer: Yuxing Peng, Trung Nguyen
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 import yaml
 from tabulate import tabulate
@@ -146,6 +146,33 @@ class Cloud():
         if row_user in self.users:
             accumulated = df.loc[df['User'] == row_user].astype({'Cost': float})['Cost'].sum()
             df.loc[idx, 'Balance'] = float(self.users[row_user]['budget']) - accumulated
+
+    def _abort_restart_session(self, df, unit_price, label, reason, stop_fn):
+        """
+        Roll back a restart whose walltime shutdown could not be armed.
+
+        create_nodes() destroys an instance when it cannot schedule
+        `shutdown -P`, on the reasoning that an instance with no timer runs
+        until somebody notices. A restarted instance is in the same position,
+        but it holds user data, so stop it instead of destroying it.
+
+        restart_nodes() writes the session row before the SSH step, so close
+        that row at the real end time; leaving it would bill a full-walltime
+        projection for a session that lasted minutes, and leave the row looking
+        like a legitimate open session.
+        """
+        print(f"Failed to schedule the walltime shutdown on {label}: {reason}")
+        print("Stopping the instance to avoid unbounded charges; data is preserved.")
+        try:
+            stop_fn()
+        except Exception as e:
+            print(f"WARNING: could not stop {label}: {e}\n"
+                  f"         Run 'skyway_stop' on it now — it has no shutdown timer.")
+            return
+        if df is not None and len(df) > 0:
+            self._close_usage_row(df, df.index[0],
+                                  datetime.now(timezone.utc), unit_price)
+            df.to_pickle(self.usage_history)
 
     # instance operations
 

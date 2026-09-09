@@ -699,6 +699,12 @@ class AWS(Cloud):
                 host = instance.public_ip_address
                 cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host} 'sudo shutdown -P +{walltime_in_minutes}' "
                 p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+                if p.returncode != 0:
+                    self._abort_restart_session(
+                        df, unit_price, node_name,
+                        (p.stderr or '').strip() or f"ssh exited {p.returncode}",
+                        lambda: instance.stop())
+                    continue
 
                 print(f'\nInstance {node_name} is up.')
                 print("To connect to the instance, run:")

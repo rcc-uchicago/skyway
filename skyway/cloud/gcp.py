@@ -880,12 +880,19 @@ class GCP(Cloud):
 
                 # make sure to shutdown the instance after the walltime (in minutes)
                 host = node.public_ips[0]
-                utils.ssh_until_success(
-                    host,
-                    user_name,
-                    self.my_ssh_private_key,
-                    f"sudo shutdown -P +{walltime_in_minutes}",
-                )
+                try:
+                    utils.ssh_until_success(
+                        host,
+                        user_name,
+                        self.my_ssh_private_key,
+                        f"sudo shutdown -P +{walltime_in_minutes}",
+                    )
+                except RuntimeError as e:
+                    self._abort_restart_session(
+                        df, unit_price, node.name, str(e),
+                        lambda: self.driver.ex_stop_node(node))
+                    traceback.print_exc()
+                    continue
 
                 # execute the post boot script on the VM
                 # need to install gcsfuse or nfs-utils on the VM (or having an image that has gcsfuse installed) to mount available storage
@@ -941,12 +948,20 @@ class GCP(Cloud):
                 current_time_str = current_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
                 time.sleep(30)
                 host = self._get_tpu_external_ip(refreshed_tpu)
-                utils.ssh_until_success(
-                    host,
-                    user_name,
-                    self.my_ssh_private_key,
-                    f"sudo shutdown -P +{walltime_in_minutes}",
-                )
+                try:
+                    utils.ssh_until_success(
+                        host,
+                        user_name,
+                        self.my_ssh_private_key,
+                        f"sudo shutdown -P +{walltime_in_minutes}",
+                    )
+                except RuntimeError as e:
+                    # No usage row yet on this path -- it is written below.
+                    self._abort_restart_session(
+                        None, unit_price, short_name, str(e),
+                        lambda: self._stop_tpu_node(short_name, tpu_zone))
+                    traceback.print_exc()
+                    continue
                 if self.post_boot_script != "":
                     script_file = os.environ['SKYWAYROOT'] + "/etc/accounts/" + self.post_boot_script
                     script_cmd = utils.script2cmd(script_file)
