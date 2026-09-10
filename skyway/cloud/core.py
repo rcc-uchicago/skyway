@@ -179,6 +179,25 @@ class Cloud():
         matches = rows.index[starts.notna() & (starts >= cutoff)]
         return matches[0] if len(matches) else None
 
+    def _usage_row_is_closed(self, df, idx, now=None):
+        """
+        Whether a usage row already records a finished session.
+
+        An open row carries the projected shutdown time written at launch,
+        which is still in the future; a closed one carries the real End, which
+        is in the past. Backends that cannot identify which session a row
+        belongs to use this to avoid rewriting a row that is already correct.
+        An End that will not parse counts as closed, so the ambiguous case
+        errs toward leaving the ledger alone.
+        """
+        end = pd.to_datetime(df.loc[idx, 'End'], format='mixed', utc=True,
+                             errors='coerce')
+        if pd.isna(end):
+            return True
+        ref = pd.Timestamp(now if now is not None else datetime.now(timezone.utc))
+        ref = ref.tz_localize('UTC') if ref.tz is None else ref.tz_convert('UTC')
+        return end <= ref
+
     def _abort_restart_session(self, df, unit_price, label, reason, stop_fn):
         """
         Roll back a restart whose walltime shutdown could not be armed.

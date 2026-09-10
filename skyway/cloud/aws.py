@@ -527,14 +527,17 @@ class AWS(Cloud):
                 else:
                     df = pd.DataFrame([], columns=['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
 
-                if instance.instance_id not in df['InstanceID'].values:
+                # close the row for this session if one exists. launch_time
+                # resets on every start, so it identifies the session; an
+                # instance started outside Skyway has no row for it, and
+                # closing the newest older row instead would overwrite a
+                # correct, already-closed record and bill the gap in between.
+                session_idx = self._find_session_row(df, instance.instance_id,
+                                                     instance.launch_time)
+                if session_idx is None:
                     df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
                 else:
-                    # restart_nodes prepends one row per session, so the first
-                    # match is the newest; close only that one out and leave the
-                    # earlier sessions' timestamps intact
-                    first_found_idx = df[df['InstanceID'] == instance.instance_id].index[0]
-                    self._close_usage_row(df, first_found_idx, end_time, instance_unit_cost)
+                    self._close_usage_row(df, session_idx, end_time, instance_unit_cost)
                 df.to_pickle(self.usage_history)
 
                 instances.append(instance)

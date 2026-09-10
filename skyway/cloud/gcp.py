@@ -1123,11 +1123,13 @@ class GCP(Cloud):
                 # backdate End to the destroy and bill every idle hour since.
                 was_running = node.state == "running"
 
-                creation_time_str = node.extra.get('creationTimestamp')  # GCP
-                # Convert the creation time from string to datetime object
-                creation_time = datetime.strptime(creation_time_str, '%Y-%m-%dT%H:%M:%S.%f%z')
+                # bill from the start of the current session, not from creation:
+                # an instance that was stopped and started again would otherwise
+                # be charged for every hour it sat stopped in between
+                session_start = self.get_session_start_time(node)
+                session_start_str = session_start.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
                 current_time = datetime.now(timezone.utc)
-                running_time = current_time - creation_time
+                running_time = current_time - session_start
                 instance_unit_cost = self.get_unit_price_instance(node)
                 running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
 
@@ -1146,28 +1148,27 @@ class GCP(Cloud):
                     continue
 
                 # record the running time and cost
-                running_time = current_time - creation_time
-                instance_unit_cost = self.get_unit_price_instance(node)
-                running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
                 usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
 
                 current_time_str = current_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
 
                 # store the record into the database
-                data = [node_user_name, node.id, node.size, creation_time_str, current_time_str, running_cost, remaining_balance]
+                data = [node_user_name, node.id, node.size, session_start_str, current_time_str, running_cost, remaining_balance]
 
                 if os.path.isfile(self.usage_history):
                     df = pd.read_pickle(self.usage_history)
                 else:
                     df = pd.DataFrame([], columns=['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
 
-                if node.id not in df['InstanceID'].values:
+                # close the row for this session if one exists; a session
+                # started outside Skyway has none, and closing the newest
+                # older row instead would overwrite a correct, already-closed
+                # record and bill the gap between the two sessions
+                session_idx = self._find_session_row(df, node.id, session_start)
+                if session_idx is None:
                     df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
                 else:
-                    # since restart_nodes() prepends to the database with instance ID every time
-                    # finds the first row with instance ID to set the end time
-                    first_found_idx = df[df['InstanceID'] == node.id].index[0]
-                    self._close_usage_row(df, first_found_idx, current_time, instance_unit_cost)
+                    self._close_usage_row(df, session_idx, current_time, instance_unit_cost)
 
                 df.to_pickle(self.usage_history)
 
@@ -1211,11 +1212,13 @@ class GCP(Cloud):
                     df = pd.read_pickle(self.usage_history)
                 else:
                     df = pd.DataFrame([], columns=['User', 'InstanceID', 'InstanceType', 'Start', 'End', 'Cost', 'Balance'])
-                if tpu_node.name not in df['InstanceID'].values:
+                # see the GCE branch above: only close a row belonging to this
+                # session, otherwise append a new one
+                session_idx = self._find_session_row(df, tpu_node.name, creation_time)
+                if session_idx is None:
                     df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
                 else:
-                    first_found_idx = df[df['InstanceID'] == tpu_node.name].index[0]
-                    self._close_usage_row(df, first_found_idx, current_time, instance_unit_cost)
+                    self._close_usage_row(df, session_idx, current_time, instance_unit_cost)
                 df.to_pickle(self.usage_history)
 
 

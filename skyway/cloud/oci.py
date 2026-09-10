@@ -509,10 +509,23 @@ class OCI(Cloud):
                 if instance.id not in df['InstanceID'].values:
                     df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
                 else:
-                    # restart_nodes prepends one row per session, so the first
-                    # match is the newest; close only that one out and leave the
-                    # earlier sessions' timestamps intact
+                    # Rows are prepended one per session, so the first match is
+                    # the newest. Unlike GCP and AWS, OCI reports no last-start
+                    # time (the Instance model carries only time_created), so
+                    # there is no way to tell whether that row belongs to the
+                    # session being destroyed. If it is already closed its End
+                    # and Cost are correct, and rewriting them would bill every
+                    # hour between the two sessions — leave the ledger alone and
+                    # say so, rather than write a figure we cannot justify.
                     first_found_idx = df[df['InstanceID'] == instance.id].index[0]
+                    if self._usage_row_is_closed(df, first_found_idx, end_time):
+                        print(f"WARNING: the most recent usage row for {instance.id} is "
+                              f"already closed, and OCI does not report when the "
+                              f"current session started.")
+                        print(f"         This session was NOT recorded. Reconcile it with:")
+                        print(f"           skyway_history -A {self.account_name} "
+                              f"-u {user_name} --amend {instance.id}")
+                        continue
                     self._close_usage_row(df, first_found_idx, end_time, instance_unit_cost)
                 df.to_pickle(self.usage_history)
 
