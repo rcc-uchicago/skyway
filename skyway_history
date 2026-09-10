@@ -103,6 +103,32 @@ def _find_instance(account, vendor_name, instance_id):
     return None
 
 
+_GCP_API_CACHE = {}
+
+
+def _gcp_api_instance(instance):
+    """
+    Return the raw Compute Engine representation of a libcloud GCE node.
+
+    libcloud's GCE driver does not map lastStartTimestamp/lastStopTimestamp into
+    node.extra, so an instance that was stopped and started again still looks
+    like it has been running since creationTimestamp. Read the fields from the
+    API instead. Returns {} if the lookup fails.
+    """
+    if instance.id in _GCP_API_CACHE:
+        return _GCP_API_CACHE[instance.id]
+    obj = {}
+    try:
+        self_link = instance.extra.get('selfLink')
+        if self_link:
+            path = self_link.split('/projects/' + str(instance.driver.project), 1)[-1]
+            obj = instance.driver.connection.request(path).object or {}
+    except Exception as e:
+        print(f"WARNING: could not read start/stop times from the API: {e}")
+    _GCP_API_CACHE[instance.id] = obj
+    return obj
+
+
 def _get_last_start_time(instance, vendor_name):
     """
     Return the most recent start time of the instance as a timezone-aware datetime.
@@ -112,7 +138,8 @@ def _get_last_start_time(instance, vendor_name):
     OCI/Azure: only creation time is readily available; we fall back to it.
     """
     if vendor_name == 'gcp':
-        ts = instance.extra.get('lastStartTimestamp') or instance.extra.get('creationTimestamp')
+        ts = (_gcp_api_instance(instance).get('lastStartTimestamp')
+              or instance.extra.get('creationTimestamp'))
         if ts:
             return _parse_ts(ts)
     elif vendor_name == 'aws':
@@ -212,8 +239,23 @@ def _amend(account, vendor_name, instance_id, user_name, dry_run):
         print("Nothing to amend.")
         return
 
+    # --- when did the unrecorded session end? ---
+    # A running instance is still accruing, so bill up to now. One that has
+    # already been stopped ended at lastStopTimestamp; using now would bill the
+    # idle time since the stop.
+    end_time = now
+    end_source = "now"
+    if vendor_name == 'gcp':
+        api = _gcp_api_instance(instance)
+        stop_ts = api.get('lastStopTimestamp')
+        if api.get('status') == 'TERMINATED' and stop_ts:
+            stop_dt = _parse_ts(stop_ts)
+            if stop_dt > last_start:
+                end_time = stop_dt
+                end_source = "API lastStopTimestamp"
+
     # --- compute cost for the unrecorded session ---
-    elapsed_h = (now - last_start).total_seconds() / 3600.0
+    elapsed_h = (end_time - last_start).total_seconds() / 3600.0
     unit_price = account.get_unit_price_instance(instance)
     if unit_price < 0:
         print(f"WARNING: unit price not found for instance type '{_get_instance_type(instance, vendor_name)}'; cost will be 0.")
@@ -227,7 +269,7 @@ def _amend(account, vendor_name, instance_id, user_name, dry_run):
 
     instance_type = _get_instance_type(instance, vendor_name)
     start_str = last_start.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
-    end_str = now.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+    end_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
 
     row = [user_name, instance_id, instance_type, start_str, end_str,
            session_cost, remaining_balance]
@@ -237,9 +279,13 @@ def _amend(account, vendor_name, instance_id, user_name, dry_run):
     print(tabulate([row], headers=cols, floatfmt='.4f'))
     print(f"\nNotes:")
     print(f"  Start = API lastStartTimestamp ({start_str})")
-    print(f"  End   = now ({end_str}) — will be overwritten by stop_nodes/destroy_nodes")
+    if end_source == "now":
+        print(f"  End   = now ({end_str}) — will be overwritten by stop_nodes/destroy_nodes")
+    else:
+        print(f"  End   = {end_source} ({end_str}) — session already closed on the cloud side")
     print(f"  Cost  = {elapsed_h:.3f}h × ${unit_price}/h = ${session_cost:.4f}")
-    print(f"          (covers elapsed time to now; any runtime after this amend is NOT included)")
+    if end_source == "now":
+        print(f"          (covers elapsed time to now; any runtime after this amend is NOT included)")
 
     if dry_run:
         print("\n[DRY RUN] No changes made.")

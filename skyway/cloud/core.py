@@ -147,6 +147,38 @@ class Cloud():
             accumulated = df.loc[df['User'] == row_user].astype({'Cost': float})['Cost'].sum()
             df.loc[idx, 'Balance'] = float(self.users[row_user]['budget']) - accumulated
 
+    def _find_session_row(self, df, instance_id, session_start,
+                          tolerance_minutes=5):
+        """
+        Return the index of the usage row recording the session that began at
+        session_start, or None if that session was never recorded.
+
+        Rows are prepended newest-first, so callers used to just take
+        index[0]. That is only right when every session got a row: create_nodes
+        and restart_nodes write one, but an instance started outside Skyway
+        does not, and then index[0] is an older, already-closed session whose
+        End and Cost are correct. Closing it again rewrites a good historical
+        record and bills the user for the whole gap in between.
+
+        Matching on Start rather than on "is End still in the future" keeps the
+        answer right for a session that outlived its projected walltime.
+        """
+        if session_start is None:
+            return None
+        rows = df[df['InstanceID'] == instance_id]
+        if rows.empty:
+            return None
+        # Stored timestamps are heterogeneous (offset with/without a colon,
+        # 3- or 6-digit fractional seconds), so let pandas infer per value.
+        starts = pd.to_datetime(rows['Start'], format='mixed', utc=True,
+                                errors='coerce')
+        cutoff = pd.Timestamp(session_start)
+        cutoff = cutoff.tz_localize('UTC') if cutoff.tz is None \
+            else cutoff.tz_convert('UTC')
+        cutoff -= pd.Timedelta(minutes=tolerance_minutes)
+        matches = rows.index[starts.notna() & (starts >= cutoff)]
+        return matches[0] if len(matches) else None
+
     def _abort_restart_session(self, df, unit_price, label, reason, stop_fn):
         """
         Roll back a restart whose walltime shutdown could not be armed.
