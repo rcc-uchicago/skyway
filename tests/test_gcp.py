@@ -4,6 +4,7 @@ All cloud API calls are mocked — no credentials or live instances needed.
 """
 import os
 import unittest
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 import libcloud.common.google
@@ -304,6 +305,61 @@ class TestRestartNodes(GCPTestCase):
         ssh_mock.assert_called_once()
         host_arg = ssh_mock.call_args[0][0]
         self.assertEqual(host_arg, '9.8.7.6')
+
+
+# ---------------------------------------------------------------------------
+# get_running_cost
+# ---------------------------------------------------------------------------
+
+class TestGetRunningCost(GCPTestCase):
+    """
+    Live cost must be measured from the start of the current session, not from
+    creationTimestamp: an instance that was stopped and started again would
+    otherwise be billed for every hour it sat stopped in between.
+    """
+
+    # created a week before the session the instance is currently in
+    _CREATED = '2024-01-01T00:00:00.000000+0000'
+    _LAST_START = '2024-01-08T00:00:00.000000+0000'
+    _NOW = datetime(2024, 1, 8, 2, 0, 0, tzinfo=timezone.utc)  # 2 h into session
+
+    def _run(self, raw_instance):
+        node = _make_node()
+        node.extra['creationTimestamp'] = self._CREATED
+        node.extra['selfLink'] = (
+            'https://www.googleapis.com/compute/v1/projects/test-project'
+            '/zones/us-central1-b/instances/test-node'
+        )
+        self.gcp.driver.list_nodes.return_value = [node]
+        self.gcp._raw_instance_cache = {}
+        self.gcp.driver.connection.request.return_value = MagicMock(object=raw_instance)
+        self.gcp.get_unit_price_instance = MagicMock(return_value=0.1)
+
+        with patch('skyway.cloud.gcp.datetime') as mock_dt:
+            mock_dt.now.return_value = self._NOW
+            mock_dt.strptime = datetime.strptime
+            return self.gcp.get_running_cost(verbose=False, user_name='testuser')
+
+    def test_bills_from_last_start_not_creation(self):
+        cost = self._run({'lastStartTimestamp': self._LAST_START})
+        # 2 h x $0.1, not the 170 h since creation
+        self.assertAlmostEqual(cost, 0.2, places=6)
+
+    def test_falls_back_to_creation_when_never_restarted(self):
+        cost = self._run({})
+        # no lastStartTimestamp: the session began at creation, 170 h ago
+        self.assertAlmostEqual(cost, 17.0, places=6)
+
+    def test_skips_node_with_no_usable_timestamp(self):
+        node = _make_node()
+        node.extra['creationTimestamp'] = None
+        node.extra['selfLink'] = None
+        self.gcp.driver.list_nodes.return_value = [node]
+        self.gcp._raw_instance_cache = {}
+        self.gcp.get_unit_price_instance = MagicMock(return_value=0.1)
+
+        cost = self.gcp.get_running_cost(verbose=False, user_name='testuser')
+        self.assertEqual(cost, 0.0)
 
 
 if __name__ == '__main__':

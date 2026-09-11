@@ -1354,14 +1354,13 @@ class GCP(Cloud):
                 if user_name != node_user_name:
                     continue
 
-                # Get the creation time of the instance
-                creation_time_str = node.extra.get('creationTimestamp')  # GCP
-                if creation_time_str:
-                    # Convert the creation time from string to datetime object
-                    creation_time = datetime.strptime(creation_time_str, '%Y-%m-%dT%H:%M:%S.%f%z')
-
+                # bill from the start of the current session, not from creation:
+                # an instance that was stopped and started again would otherwise
+                # be charged for every hour it sat stopped in between
+                session_start = self.get_session_start_time(node)
+                if session_start:
                     # Calculate the running time
-                    running_time = current_time - creation_time
+                    running_time = current_time - session_start
 
                     instance_unit_cost = self.get_unit_price_instance(node)
                     running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
