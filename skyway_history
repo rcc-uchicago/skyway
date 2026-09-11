@@ -762,7 +762,8 @@ def _match_rows_to_spans(rows, spans):
 
 
 def _from_cloud(account, vendor_name, user_name, all_users, instance_id,
-                add_missing, rebalance, apply_changes, assume_yes):
+                add_missing, drop_duplicates, rebalance, apply_changes,
+                assume_yes):
     if vendor_name != 'gcp':
         sys.exit(f"--from-cloud is implemented for GCP only (this account is "
                  f"'{vendor_name}'). The other vendors expose no equivalent "
@@ -890,10 +891,12 @@ def _from_cloud(account, vendor_name, user_name, all_users, instance_id,
         print("")
 
     if dup_rows:
+        verdict = "will be dropped (--drop-duplicates)" if drop_duplicates \
+            else "are left alone for you to decide"
         print(f"Duplicate sessions ({len(dup_rows)}) — these rows share one real "
               f"running span with an earlier row (Skyway recorded a restart that "
               f"never cycled the power). Billing both would double-count, so they "
-              f"are left alone for you to decide:")
+              f"{verdict}:")
         print(tabulate(
             [[idx, row['User'], str(row['InstanceID'])[:20], row['InstanceType'],
               start.strftime('%m-%d %H:%M:%S'), float(row['Cost']), keeper]
@@ -918,7 +921,8 @@ def _from_cloud(account, vendor_name, user_name, all_users, instance_id,
           f"{len(still_running)} running, "
           f"{len(unmatched_rows) + len(no_events)} without usable cloud data.")
 
-    writes = list(changed) + (list(missing) if add_missing else [])
+    writes = (list(changed) + (list(missing) if add_missing else [])
+              + (list(dup_rows) if drop_duplicates else []))
     if not writes:
         print("\nNothing to write.")
         return
@@ -929,13 +933,22 @@ def _from_cloud(account, vendor_name, user_name, all_users, instance_id,
     if add_missing:
         for m in missing:
             per_user[m['user']] = per_user.get(m['user'], 0.0) + m['new_cost']
+    if drop_duplicates:
+        # dropping a double-counted row refunds exactly what it charged
+        for _, row, _, _, _ in dup_rows:
+            try:
+                cost = float(row['Cost'])
+            except (TypeError, ValueError):
+                cost = 0.0
+            per_user[row['User']] = per_user.get(row['User'], 0.0) - cost
     print("\nNet Cost change per user (negative = user was over-charged):")
     print(tabulate(sorted(per_user.items()), headers=['User', 'Delta ($)'],
                    floatfmt='.4f'))
 
     if not apply_changes:
         print(f"\n[DRY RUN] {len(changed)} row(s) would be rewritten"
-              + (f" and {len(missing)} added" if add_missing else "")
+              + (f", {len(missing)} added" if add_missing else "")
+              + (f", {len(dup_rows)} dropped" if drop_duplicates else "")
               + ". Re-run with --apply to write.")
         return
 
@@ -953,6 +966,15 @@ def _from_cloud(account, vendor_name, user_name, all_users, instance_id,
         df.loc[e['idx'], 'Start'] = e['span_start'].strftime(fmt)
         df.loc[e['idx'], 'End'] = e['span_end'].strftime(fmt)
         df.loc[e['idx'], 'Cost'] = e['new_cost']
+
+    # Drop before the add_missing concat below: that concat reindexes with
+    # ignore_index=True, which would invalidate the indices collected here.
+    if drop_duplicates and dup_rows:
+        df = df.drop(index=[idx for idx, _, _, _, _ in dup_rows])
+        # every other writer prepends with ignore_index=True, so keep the
+        # stored index contiguous rather than leaving holes behind
+        df = df.reset_index(drop=True)
+        print(f"Dropped {len(dup_rows)} double-counted row(s).")
 
     if add_missing and missing:
         cols = ['User', 'InstanceID', 'InstanceType', 'Start', 'End', 'Cost', 'Balance']
@@ -1017,6 +1039,10 @@ if __name__ == '__main__':
     parser.add_argument('--add-missing', dest='add_missing', action='store_true', default=False,
                         help="With --from-cloud: also record real sessions that have no "
                              "ledger row at all")
+    parser.add_argument('--drop-duplicates', dest='drop_duplicates',
+                        action='store_true', default=False,
+                        help="With --from-cloud: also delete rows that double-count "
+                             "a running span already billed by an earlier row")
     parser.add_argument('--close-at-walltime', dest='close_at_walltime',
                         action='store_true', default=False,
                         help="Repair suspect rows by rewriting End to Start + walltime "
@@ -1030,6 +1056,12 @@ if __name__ == '__main__':
     if len(modes) > 1:
         sys.exit(f"{' and '.join(modes)} cannot be combined; run them separately.")
 
+    for flag, on in (('--add-missing', args.add_missing),
+                     ('--drop-duplicates', args.drop_duplicates)):
+        if on and not args.from_cloud:
+            sys.exit(f"{flag} only applies with --from-cloud; the cloud operations "
+                     f"log is what identifies the rows it acts on.")
+
     vendor_name = _infer_vendor(args.account, args.provider)
     if vendor_name not in SUPPORTED_VENDORS:
         sys.exit(f"Cannot infer vendor from account name '{args.account}'. "
@@ -1041,7 +1073,8 @@ if __name__ == '__main__':
 
     if args.from_cloud:
         _from_cloud(account, vendor_name, args.username, args.all_users,
-                    args.instance_filter, args.add_missing, args.rebalance,
+                    args.instance_filter, args.add_missing,
+                    args.drop_duplicates, args.rebalance,
                     apply_changes=args.apply_changes and not args.dry_run,
                     assume_yes=args.assume_yes)
     elif args.repair_cost:
