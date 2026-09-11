@@ -559,6 +559,12 @@ class GCP(Cloud):
                                                         ex_accelerator_type=gpu_type,
                                                         ex_accelerator_count=gpu_count,
                                                         ex_on_host_maintenance='TERMINATE',
+                                                        # GCE defaults automaticRestart to true: after a host
+                                                        # maintenance event it powers the VM back up, which
+                                                        # loses the in-guest walltime timer (systemd keeps
+                                                        # 'shutdown -P' state in /run) and records no usage
+                                                        # row, so the instance bills on unnoticed.
+                                                        ex_automatic_restart=False,
                                                         ex_tags=tags,
                                                         ex_metadata={'ssh-keys': user_name_pub_key},
                                                         ex_disk_type=boot_disk_type)
@@ -881,6 +887,20 @@ class GCP(Cloud):
                         return
 
                 print(Fore.BLUE + f"Allocating an instance ...\n", end=" ")
+
+                # Instances created before automaticRestart was pinned off still
+                # carry GCE's default of true. Correct it here, while the node is
+                # stopped, so it cannot be silently powered back up later without
+                # a walltime timer or a usage row. Never leave on_host_maintenance
+                # unset: libcloud resets an omitted field to the GCE default,
+                # which would try to put MIGRATE on a GPU instance.
+                try:
+                    self.driver.ex_set_node_scheduling(
+                        node, on_host_maintenance='TERMINATE',
+                        automatic_restart=False)
+                except Exception as e:
+                    print(f"WARNING: could not disable automaticRestart for "
+                          f"{node.name}: {e}")
 
                 self.driver.ex_start_node(node)
 
