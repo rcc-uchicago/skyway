@@ -213,6 +213,66 @@ class GCP(Cloud):
         return sorted(loc.name for loc in locations if loc.name.startswith(region_prefix))
 
     # -------------------------------------------------------------------------
+    # Network helpers
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def _region_of(zone):
+        """us-central1-b -> us-central1"""
+        return '-'.join(zone.split('-')[:-1])
+
+    @staticmethod
+    def _tail(url):
+        """Last path component of a GCE self-link, or None."""
+        return url.rstrip('/').split('/')[-1] if url else None
+
+    def resolve_subnetwork(self, network, zone, subnets):
+        """Return the subnetwork of `network` that serves `zone`, or None.
+
+        Subnetworks are regional and carry arbitrary names, so they cannot be
+        looked up by zone name. On an auto-mode VPC every region has exactly
+        one same-named subnet and GCE fills it in for us, so None is a fine
+        answer; on a custom-mode VPC GCE rejects the instance outright unless
+        we name the subnet, so a miss there is a configuration error.
+        """
+        if network is None:
+            # vpc_name matched nothing; libcloud falls back to the 'default'
+            # network, so leave the subnet to GCE rather than guess one that
+            # may well belong to a different VPC.
+            return None
+
+        region = self._region_of(zone)
+        net_link = network.extra.get('selfLink')
+
+        candidates = [sub for sub in subnets
+                      if self._tail(sub.extra.get('region')) == region
+                      and sub.extra.get('network') == net_link]
+
+        # An account may pin a subnet by name when its VPC has several per region.
+        wanted = self.account.get('subnet_name')
+        if wanted:
+            match = next((sub for sub in candidates if sub.name == wanted), None)
+            if match is None:
+                raise Exception(f"Subnet '{wanted}' is not defined in region {region} "
+                                f"of network '{network.name}'.")
+            return match
+
+        if len(candidates) > 1:
+            # Deterministic pick, so repeated allocations land on the same subnet.
+            candidates.sort(key=lambda sub: sub.name)
+
+        if candidates:
+            return candidates[0]
+
+        if getattr(network, 'mode', None) == 'auto':
+            return None
+
+        raise Exception(
+            f"Network '{network.name}' in project {self.project_id} has no "
+            f"subnet in region {region} (zone {zone}). Point 'location' in the account "
+            f"config at a zone the network covers, or add a subnet there.")
+
+    # -------------------------------------------------------------------------
     # TPU private helpers
     # -------------------------------------------------------------------------
 
@@ -248,11 +308,16 @@ class GCP(Cloud):
         node.accelerator_type = node_cfg['tpu-type']
         node.runtime_version = node_cfg['tpu-runtime']
         vpc_name = self.account.get('vpc_name', 'vpc1')
-        region = '-'.join(zone.split('-')[:-1])  # e.g. us-central1-f -> us-central1
+        region = self._region_of(zone)  # e.g. us-central1-f -> us-central1
+        networks = self.driver.ex_list_networks()
+        network = next((net for net in networks if net.name == vpc_name), None)
+        # The subnet is not necessarily named after the VPC; look it up.
+        subnet = self.resolve_subnetwork(network, zone, self.driver.ex_list_subnetworks('all'))
+        subnet_name = subnet.name if subnet is not None else vpc_name
         network_config = tpu_v2.NetworkConfig()
         network_config.enable_external_ips = True
         network_config.network = f"projects/{self.project_id}/global/networks/{vpc_name}"
-        network_config.subnetwork = f"projects/{self.project_id}/regions/{region}/subnetworks/{vpc_name}"
+        network_config.subnetwork = f"projects/{self.project_id}/regions/{region}/subnetworks/{subnet_name}"
         node.network_config = network_config
         node.metadata = {'ssh-keys': ssh_key_metadata}
         node.labels = {'user': user_name, 'node_name': node_name}
@@ -497,7 +562,7 @@ class GCP(Cloud):
 
         networks = self.driver.ex_list_networks()
         network = next((net for net in networks if net.name == vpc_name), None)
-        subnets = self.driver.ex_list_subnetworks()
+        subnets = self.driver.ex_list_subnetworks('all')
 
         for node_name in node_names:
             gpu_type = None
@@ -542,7 +607,7 @@ class GCP(Cloud):
                         node_size = node_cfg['tpu-type']
                         creation_time_str = created_tpu.create_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
                     else:
-                        subnet = next((sub for sub in subnets if sub.name == zone), None)
+                        subnet = self.resolve_subnetwork(network, zone, subnets)
                         boot_disk_type = node_cfg.get('boot_disk_type', 'pd-standard')
                         created_node = self.driver.create_node(node_name,
                                                         size=node_cfg['name'],

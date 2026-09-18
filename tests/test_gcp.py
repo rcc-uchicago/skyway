@@ -65,8 +65,11 @@ class GCPTestCase(unittest.TestCase):
         self.gcp.post_boot_script = ''
         self.gcp.users = {'testuser': {'budget': 100.0}}
 
+        # An auto-mode VPC: GCE derives the subnet itself, so resolve_subnetwork
+        # is allowed to come back empty-handed.
         mock_network = MagicMock()
         mock_network.name = 'vpc1'
+        mock_network.mode = 'auto'
         self.gcp.driver.ex_list_networks.return_value = [mock_network]
         self.gcp.driver.ex_list_subnetworks.return_value = []
 
