@@ -3,6 +3,8 @@ Unit tests for the GCP backend.
 All cloud API calls are mocked — no credentials or live instances needed.
 """
 import os
+import shutil
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
@@ -251,6 +253,52 @@ class TestCreateNodes(GCPTestCase):
         self.assertEqual(self.gcp.driver.create_node.call_count, 2)
         second_call_zone = self.gcp.driver.create_node.call_args_list[1].kwargs['location']
         self.assertEqual(second_call_zone, 'us-east1-a')
+
+    def test_post_boot_script_goes_through_the_detached_helper(self):
+        """The post boot script must not be shelled out to with a bare
+        `ssh -t ... '<script>'`: a daemon it leaves behind (gcsfuse on every
+        group GCP account) holds the session open and hangs create_nodes."""
+        script_dir = tempfile.mkdtemp(prefix='skyway_ci_root_')
+        os.makedirs(os.path.join(script_dir, 'etc', 'accounts'))
+        script_path = os.path.join(script_dir, 'etc', 'accounts', 'post_boot.sh')
+        with open(script_path, 'w') as f:
+            f.write('mkdir -p /tmp/gcs; gcsfuse testbucket /tmp/gcs > /dev/null\n')
+        self.addCleanup(shutil.rmtree, script_dir)
+
+        self.gcp.post_boot_script = 'post_boot.sh'
+
+        fresh_node = _make_node(public_ips=['1.2.3.4'])
+        self.gcp.driver.create_node.return_value = _make_node(public_ips=[])
+        self.gcp.driver.wait_until_running.return_value = [(fresh_node, ['1.2.3.4'])]
+        self._stub_finances()
+
+        post_boot_mock = MagicMock()
+
+        with patch.dict(os.environ, {'USER': 'testuser', 'SKYWAYROOT': script_dir}), \
+             patch('subprocess.run',
+                   return_value=MagicMock(stdout='ssh-rsa AAAA key', returncode=0)) as mock_run, \
+             patch('skyway.cloud.gcp.time.sleep'), \
+             patch('skyway.cloud.gcp.utils.ssh_until_success'), \
+             patch('skyway.cloud.gcp.utils.run_post_boot_script', post_boot_mock), \
+             patch('skyway.cloud.gcp.pd') as mock_pd:
+            mock_pd.DataFrame.return_value = MagicMock()
+            mock_pd.concat.return_value = MagicMock()
+            self.gcp.create_nodes(
+                't1', ['test-node'],
+                need_confirmation=False,
+                walltime='00:30:00',
+            )
+
+        post_boot_mock.assert_called_once()
+        host_arg = post_boot_mock.call_args[0][0]
+        self.assertEqual(host_arg, '1.2.3.4')
+        self.assertIn('gcsfuse testbucket', post_boot_mock.call_args[0][3])
+
+        # and nothing else ran the script over a tty-allocating ssh
+        for call_args in mock_run.call_args_list:
+            cmd = call_args[0][0]
+            cmd = cmd if isinstance(cmd, str) else ' '.join(cmd)
+            self.assertNotIn('gcsfuse', cmd)
 
     def test_all_zones_fail_returns_empty_dict(self):
         """If every zone fails, the node should not appear in the returned dict."""
