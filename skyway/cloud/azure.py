@@ -372,8 +372,7 @@ class AZURE(Cloud):
                 if self.post_boot_script != "":
                     script_file = os.environ['SKYWAYROOT'] + "/etc/accounts/" + self.post_boot_script
                     script_cmd = utils.script2cmd(script_file)
-                    cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{public_ip} '{script_cmd}' "
-                    p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+                    utils.run_post_boot_script(public_ip, user_name, self.my_ssh_private_key, script_cmd)
 
         return nodes
 

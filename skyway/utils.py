@@ -54,10 +54,13 @@ def get_username(uid):
     uid = proc("getent passwd " + uid + " | awk -F: '{print $1}'")
     return None if uid==[] else uid[0]
 
-# run a command over ssh
-def run_ssh(host, user, key, remote_cmd, timeout=10):
-    cmd = [
+# build the ssh command line used to run a command on an instance
+def ssh_cmdline(host, user, key, remote_cmd, timeout=10):
+    return [
         "ssh",
+        # never read from the terminal: no tty is allocated, so a remote
+        # command cannot silently wait for input from the user
+        "-n",
         "-i", key,
         "-o", "StrictHostKeyChecking=no",
         "-o", "UserKnownHostsFile=/dev/null",
@@ -67,11 +70,26 @@ def run_ssh(host, user, key, remote_cmd, timeout=10):
         remote_cmd,
     ]
 
-    return subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-    )
+# run a command over ssh
+# run_timeout bounds the whole session, not just the connection: ssh keeps the
+# session open as long as some remote process still holds stdout/stderr, so a
+# remote command that spawns a daemon would otherwise block skyway forever
+def run_ssh(host, user, key, remote_cmd, timeout=10, run_timeout=120):
+    cmd = ssh_cmdline(host, user, key, remote_cmd, timeout)
+
+    try:
+        return subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=run_timeout,
+        )
+    except subprocess.TimeoutExpired as e:
+        return subprocess.CompletedProcess(
+            cmd, 124,
+            stdout=e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or ""),
+            stderr=f"ssh to {host} timed out after {run_timeout}s",
+        )
 
 # wait for ssh connection to be ready
 def wait_for_ssh(host, user, key, timeout=300):
@@ -103,6 +121,46 @@ def ssh_until_success(host, user, key, remote_cmd,
     raise RuntimeError(
         f"Failed to execute '{remote_cmd}' on {host}"
     )
+
+POST_BOOT_LOG = "/tmp/skyway_post_boot.log"
+
+# run the account's post boot script on an instance
+#
+# The script is run with its standard streams detached from the SSH session and
+# redirected to a log file on the instance. Post boot scripts commonly start a
+# daemon (gcsfuse, for instance): such a daemon inherits stdout/stderr, and ssh
+# only closes the session once every process holding them is gone, so without
+# the redirection ssh -- and skyway with it -- would hang until the daemon dies.
+# The log is echoed back once the script has finished, so what the script prints
+# is reported to the user instead of being swallowed.
+def run_post_boot_script(host, user, key, script_cmd,
+                         connect_timeout=10,
+                         run_timeout=600,
+                         verbose=True):
+
+    remote_cmd = (
+        f"( {script_cmd} ) > {POST_BOOT_LOG} 2>&1 < /dev/null; "
+        f"rc=$?; cat {POST_BOOT_LOG}; exit $rc"
+    )
+
+    cmd = ssh_cmdline(host, user, key, remote_cmd, connect_timeout)
+
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=run_timeout)
+    except subprocess.TimeoutExpired:
+        print(f"Post boot script did not finish within {run_timeout}s on {host}: "
+              f"see {POST_BOOT_LOG} on the instance.")
+        return None
+
+    if verbose and p.stdout.strip() != "":
+        print(p.stdout.strip())
+
+    if p.returncode != 0:
+        print(f"Post boot script exited with status {p.returncode} on {host}.")
+        if p.stderr.strip() != "":
+            print(p.stderr.strip())
+
+    return p
 
 def sendmail(email_address, to, subject, body):
     mail = "\r\n".join([

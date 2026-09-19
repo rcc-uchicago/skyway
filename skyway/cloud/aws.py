@@ -350,8 +350,8 @@ class AWS(Cloud):
             if self.post_boot_script != "":
                 script_file = os.environ['SKYWAYROOT'] + "/etc/accounts/" + self.post_boot_script
                 script_cmd = utils.script2cmd(script_file)
-                cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com '{script_cmd}' "
-                p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+                utils.run_post_boot_script(f"ec2-{ip_converted}.{region}.compute.amazonaws.com",
+                                           username, self.my_ssh_private_key, script_cmd)
 
             #  mount the storage attached to the io_node (optional)
             cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com "

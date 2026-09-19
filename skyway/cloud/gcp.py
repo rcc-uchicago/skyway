@@ -736,10 +736,10 @@ class GCP(Cloud):
                 continue
 
             if self.post_boot_script != "":
+                print("✓ Running the post boot script...")
                 script_file = os.environ['SKYWAYROOT'] + "/etc/accounts/" + self.post_boot_script
                 script_cmd = utils.script2cmd(script_file)
-                cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host} '{script_cmd}' "
-                p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+                utils.run_post_boot_script(host, user_name, self.my_ssh_private_key, script_cmd)
 
             print("✓ To connect to the instance, run:")
             print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host} or")
@@ -1026,8 +1026,7 @@ class GCP(Cloud):
                 if self.post_boot_script != "":
                     script_file = os.environ['SKYWAYROOT'] + "/etc/accounts/" + self.post_boot_script
                     script_cmd = utils.script2cmd(script_file)
-                    cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host} '{script_cmd}' "
-                    p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+                    utils.run_post_boot_script(host, user_name, self.my_ssh_private_key, script_cmd)
 
                 print(f'\nInstance {node.name} is up.')
                 print("To connect to the instance, run:")
@@ -1092,8 +1091,7 @@ class GCP(Cloud):
                 if self.post_boot_script != "":
                     script_file = os.environ['SKYWAYROOT'] + "/etc/accounts/" + self.post_boot_script
                     script_cmd = utils.script2cmd(script_file)
-                    cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host} '{script_cmd}' "
-                    p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+                    utils.run_post_boot_script(host, user_name, self.my_ssh_private_key, script_cmd)
                 print(f'\nTPU VM {short_name} is up.')
                 print("To connect to the instance, run:")
                 print(f"  ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host}")
