@@ -1156,21 +1156,26 @@ class GCP(Cloud):
     def execute_script(self, node_id: str, script_name: str):
         '''
         execute all the lines in a script on a compute node
+        Return: the exit status of the script (0 on success), so that callers
+                like skyway_batch can report how the job ended.
         '''
+        # the loop variable must not leak the last node of the list when the
+        # search fails, or the script would run on somebody else's instance
         node = None
-        for node in self.driver.list_nodes():
-            if node.state == "running":
-                if node.id == node_id:
-                    break
+        for candidate in self.driver.list_nodes():
+            if candidate.state == "running" and candidate.id == node_id:
+                node = candidate
+                break
         if node is not None:
             host = node.public_ips[0]
             user_name = os.environ['USER']
             script_cmd = utils.script2cmd(script_name)
 
             cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host} '{script_cmd}' "
-            os.system(cmd)
+            return utils.exit_code(os.system(cmd))
         else:
             print(f"Node {node_id} does not exist.")
+            return 1
 
 
     def destroy_nodes(self, IDs=[], node_names=[], need_confirmation=True):

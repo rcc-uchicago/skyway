@@ -433,6 +433,8 @@ class AWS(Cloud):
     def execute_script(self, instance_ID: str, script_name: str):
         '''
         execute all the lines in a script on an instance
+        Return: the exit status of the script (0 on success), so that callers
+                like skyway_batch can report how the job ended.
         '''
         ip = self.get_host_ip(instance_ID)
 
@@ -444,7 +446,10 @@ class AWS(Cloud):
 
         script_cmd = utils.script2cmd(script_name)
         cmd = f"ssh -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {username}@ec2-{ip_converted}.{region}.compute.amazonaws.com -t 'eval {script_cmd}' "
-        p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+        # let the script write to the terminal as it runs: capturing the output
+        # here would discard everything the job printed
+        p = subprocess.run(cmd, shell=True, text=True)
+        return p.returncode
 
 
     def destroy_nodes(self, node_names=None, IDs=None, need_confirmation=True):

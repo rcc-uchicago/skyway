@@ -194,7 +194,12 @@ To submit the job, use the `skyway_batch` command
   skyway_batch job_script.sh
   ```
 
-If the job is terminated due to time limit, the instance is stopped. You can find the instance ID with the `skyway_list` command and restart it to back up the data.
+When the job script finishes, the instance is stopped right away, so the unused part of the walltime is not charged. Likewise, if the job is terminated due to the time limit, the instance is stopped. In both cases the data on the instance is preserved: you can find the instance ID with the `skyway_list` command and restart it to back up the data.
+
+To keep the instance running after the job script finishes (until the walltime is reached, and charged until then), submit with
+  ```
+  skyway_batch --no-auto-stop job_script.sh
+  ```
 
 Transfer output data from cloud
   ```

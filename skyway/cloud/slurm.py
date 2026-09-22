@@ -328,6 +328,19 @@ class SLURMCluster(Cloud):
     def restart_nodes(self, IDs=[], node_names=[], need_confirmation=True, walltime=None):
         print("restart_nodes is not supported for Slurm/on-premises clusters.")
 
+    def release_node(self, node_name):
+        '''
+        release the allocation of a job as soon as the work on it is done
+
+        A Slurm allocation has no stopped state, so cancelling the job is what
+        frees the node and closes its usage record (see destroy_nodes).
+        '''
+        job_id = self.get_instance_ID(node_name)
+        if job_id is None:
+            print(f"No running job named {node_name} to release.")
+            return
+        self.destroy_nodes(IDs=[job_id], need_confirmation=False)
+
     def destroy_nodes(self, IDs = [], need_confirmation=True):
         '''
         destroy several nodes (aka instances) given a list of node names using scancel
@@ -525,10 +538,12 @@ class SLURMCluster(Cloud):
     def execute_script(self, node_name: str, script_name: str):
         '''
         execute all the lines in a script on a compute node
+        Return: the exit status of the script (0 on success), so that callers
+                like skyway_batch can report how the job ended.
         '''
         script_cmd = utils.script2cmd(script_name)
         cmd = f"ssh  -o StrictHostKeyChecking=accept-new {node_name} -t 'eval {script_cmd}' "
-        os.system(cmd)
+        return utils.exit_code(os.system(cmd))
 
     def get_instance_ID(self, instance_name: str):
         '''

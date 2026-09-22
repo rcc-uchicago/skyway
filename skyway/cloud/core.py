@@ -263,6 +263,17 @@ class Cloud():
         '''
         pass
 
+    def release_node(self, node_name):
+        '''
+        release a node as soon as the work on it is done, instead of waiting
+        for the walltime timer armed at launch to power it off
+
+        Stopping (rather than destroying) keeps the data on the node, lets
+        skyway_restart bring it back, and closes the usage row at the real end
+        time, so only the time actually used is billed.
+        '''
+        self.stop_nodes(node_names=[node_name], need_confirmation=False)
+
     def get_running_nodes(self, verbose=False):
         '''
         list all the running nodes (aka instances)

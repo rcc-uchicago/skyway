@@ -14,6 +14,7 @@ import colorama
 from colorama import Fore
 
 import skyway
+from skyway import utils
 from skyway.cloud.aws import *
 from skyway.cloud.gcp import *
 from skyway.cloud.azure import *
@@ -21,6 +22,13 @@ from skyway.cloud.oci import *
 from skyway.cloud.slurm import *
 
 class InstanceDescriptor:
+
+    # in-guest fallback used when the instance cannot be stopped through the
+    # cloud API: the walltime timer armed at launch is cancelled first, so that
+    # the pending shutdown does not keep the node up on systems where a second
+    # 'shutdown' does not replace the one already scheduled
+    SHUTDOWN_FALLBACK_CMD = "sudo shutdown -c; sudo shutdown -P +1"
+
     def __init__(self, jobname: str, account_name: str, node_type: str, walltime: str, vendor_name: str):
         self.jobname = jobname
         self.account_name = account_name
@@ -42,31 +50,117 @@ class InstanceDescriptor:
 
         self.user = os.environ['USER']
 
-    def submitJob(self, script_name=None, pre_execute=[]):
+    def submitJob(self, script_name=None, pre_execute=[], auto_stop=True):
         print(Fore.BLUE + f"Requesting node from {self.vendor_name} with account {self.account_name}")
         nodes = self.account.create_nodes(self.node_type, [self.jobname], need_confirmation=False, walltime=self.walltime)
 
-        # execute pre-execute commands after nodes are available: e.g. data transfers
-        for cmd in pre_execute:
-            cmd += " --account=" + self.account_name + " -J" + self.jobname
-            os.system(cmd)
+        # create_nodes returns None when the budget check fails or the request
+        # was declined, and {} when no instance came up: there is nothing to
+        # run the script on, and nothing to release
+        if not nodes:
+            print(Fore.RED + "No instance was allocated: the job was not submitted.")
+            return nodes
 
-        # execute the commands listed in the script on the compute node
-        if script_name is not None:
-            if "midway3" in self.vendor_name:
-                # for on-premises like midway3 instanceID is the host ip (which happens to be the node name)
-                instanceID = self.account.get_host_ip(self.jobname)
-                self.account.execute_script(instanceID, script_name)
+        try:
+            # execute pre-execute commands after nodes are available: e.g. data transfers
+            for cmd in pre_execute:
+                cmd += " --account=" + self.account_name + " -J" + self.jobname
+                os.system(cmd)
 
-            elif "aws" in self.vendor_name or "oci" in self.vendor_name:
-                instanceID = self.account.get_instance_ID(self.jobname)
-                self.account.execute_script(instanceID, script_name)
-
-            elif "gcp" in self.vendor_name:
-                instanceID = self.account.get_instance_ID(self.jobname)
-                self.account.execute_script(instanceID, script_name)
+            # execute the commands listed in the script on the compute node
+            if script_name is not None:
+                status = self.runScript(script_name)
+                if status == 0:
+                    print(Fore.GREEN + f"✓ Job {self.jobname} completed.")
+                else:
+                    print(Fore.RED + f"Job {self.jobname} exited with status {status}.")
+        finally:
+            # release the instance as soon as the script is done (or has failed,
+            # or the submission was interrupted), the way a Slurm job frees its
+            # nodes when the batch script exits: waiting for the walltime timer
+            # armed at launch would charge the user for the unused remainder
+            if auto_stop:
+                self.releaseJob()
+            else:
+                print(f"{self.jobname} is left running until its walltime {self.walltime}; "
+                      f"stop it with: skyway_stop --account={self.account_name} {self.jobname}")
 
         return nodes
+
+    def runScript(self, script_name):
+        '''
+        run the job script on the allocated node, and return its exit status
+        '''
+        if "midway3" in self.vendor_name:
+            # for on-premises like midway3 instanceID is the host ip (which happens to be the node name)
+            instanceID = self.account.get_host_ip(self.jobname)
+        else:
+            instanceID = self.account.get_instance_ID(self.jobname)
+
+        if not instanceID:
+            print(Fore.RED + f"Could not find a running instance named {self.jobname} to run {script_name} on.")
+            return 1
+
+        status = self.account.execute_script(instanceID, script_name)
+        # backends that do not report an exit status yet
+        return 0 if status is None else status
+
+    def releaseJob(self):
+        '''
+        release the node now that the job script is done, so that the unused
+        part of the walltime is not charged
+
+        On the cloud backends the instance is stopped, not destroyed: the data
+        on it is preserved and skyway_restart can bring it back. Stopping also
+        closes the usage record at the real end time, so the user is billed for
+        the time actually used instead of the full walltime projected at launch.
+        '''
+        print(Fore.BLUE + f"Releasing {self.jobname}: the rest of the walltime will not be charged.")
+        try:
+            self.account.release_node(self.jobname)
+        except Exception as e:
+            print(Fore.RED + f"Could not release {self.jobname} through the cloud API: {e}")
+            self.armShutdown()
+
+    def armShutdown(self):
+        '''
+        fall back to powering the instance off from inside the guest, so that a
+        failure of the cloud API does not leave the node running until its
+        walltime
+
+        This is a safety net only: the vendor stops charging once the node is
+        off, but nothing closes the usage record, which keeps holding the cost
+        projected for the full walltime at launch until it is repaired.
+        '''
+        if "midway3" in self.vendor_name:
+            print(Fore.RED + f"Cancel the job by hand: skyway_cancel --account={self.account_name} {self.jobname}")
+            return
+
+        instanceID = self.account.get_instance_ID(self.jobname)
+        if not instanceID:
+            print(f"{self.jobname} is no longer running; nothing to shut down.")
+            return
+
+        print(f"Falling back to shutting {self.jobname} down from inside the instance.")
+        result = None
+        try:
+            node_info = self.account.get_node_connection_info(instanceID)
+            user_name, host = node_info['login'].split('@', 1)
+            result = utils.run_ssh(host, user_name, node_info['private_key'],
+                                   self.SHUTDOWN_FALLBACK_CMD)
+        except Exception as e:
+            print(Fore.RED + f"Could not reach {self.jobname} over SSH: {e}")
+
+        if result is None or result.returncode != 0:
+            reason = result.stderr.strip() if result is not None else ""
+            print(Fore.RED + f"Failed to shut {self.jobname} down from inside the instance. {reason}")
+            print(Fore.RED + f"The instance is still running: stop it with "
+                             f"skyway_stop --account={self.account_name} {self.jobname}")
+            return
+
+        print(f"✓ {self.jobname} will power itself off in a minute.")
+        print(Fore.RED + f"NOTE: the usage record of {self.jobname} still holds the cost projected "
+                         f"for the full walltime {self.walltime}, and needs to be repaired.")
 
 '''
    parse the job script to get the account information, node type (constraint) and walltime
@@ -114,7 +208,15 @@ if __name__ == "__main__":
     colorama.init(autoreset=True)
 
     msg = "Skyway CLI batch job submisssion"
-    script = sys.argv[1]
+    parser = argparse.ArgumentParser(description=msg)
+    parser.add_argument('--no-auto-stop', dest='auto_stop', action='store_false',
+                        help="Leave the instance running when the job script finishes, "
+                             "until the walltime is reached (charged until then)")
+    parser.add_argument(dest='script', help="Job script to submit")
+    cli_args = parser.parse_args()
+
+    script = cli_args.script
+    auto_stop = cli_args.auto_stop
     args = parse_script(script)
 
     job_name = args['jobname']
@@ -151,4 +253,4 @@ if __name__ == "__main__":
     instanceDescriptor = InstanceDescriptor(job_name, account_name, node_type, walltime, vendor_name)
 
     # submit job
-    instanceDescriptor.submitJob(script_name=script, pre_execute=skyway_cmds)
+    instanceDescriptor.submitJob(script_name=script, pre_execute=skyway_cmds, auto_stop=auto_stop)

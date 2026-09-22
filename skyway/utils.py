@@ -49,6 +49,14 @@ def script2cmd(script_name: str):
             cmd += l + "; "
     return cmd
 
+# convert the status returned by os.system() into a shell-style exit code
+def exit_code(status):
+    if os.WIFSIGNALED(status):
+        return 128 + os.WTERMSIG(status)
+    if os.WIFEXITED(status):
+        return os.WEXITSTATUS(status)
+    return status
+
 # get the username of a uid
 def get_username(uid):
     uid = proc("getent passwd " + uid + " | awk -F: '{print $1}'")

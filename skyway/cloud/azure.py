@@ -448,6 +448,11 @@ class AZURE(Cloud):
         return node_info
 
     def execute_script(self, instance_ID: str, script_name: str):
+        '''
+        execute all the lines in a script on an instance
+        Return: the exit status of the script (0 on success), so that callers
+                like skyway_batch can report how the job ended.
+        '''
         compute_client = ComputeManagementClient(self.credentials, self.account['subscription_id'])
         vm = None
         for instance in compute_client.virtual_machines.list_all():
@@ -456,12 +461,12 @@ class AZURE(Cloud):
                 break
         if vm is None:
             print(f"Node {instance_ID} does not exist.")
-            return
+            return 1
         host = self.get_host_ip(vm.name)
         user_name = os.environ['USER']
         script_cmd = utils.script2cmd(script_name)
         cmd = f"ssh -t -i {self.my_ssh_private_key} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null {user_name}@{host} '{script_cmd}' "
-        os.system(cmd)
+        return utils.exit_code(os.system(cmd))
 
     def stop_nodes(self, IDs=[], node_names=[], need_confirmation=True):
         compute_client = ComputeManagementClient(self.credentials, self.account['subscription_id'])
