@@ -4,6 +4,7 @@ as the job script finishes instead of letting it run to the end of the
 walltime.  All cloud API calls are mocked — no credentials or live instances
 needed.
 """
+import importlib.abc
 import importlib.machinery
 import importlib.util
 import os
@@ -11,16 +12,49 @@ import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-# skyway_batch imports every backend; the SDKs that are not installed here are
-# stubbed out, as none of them is exercised by these tests
-for _name in ['boto3', 'botocore', 'botocore.exceptions', 'oci',
-              'azure', 'azure.identity', 'azure.mgmt', 'azure.mgmt.compute',
-              'azure.mgmt.compute.models', 'azure.mgmt.network',
-              'azure.mgmt.network.models', 'azure.mgmt.resource']:
+
+def _missing(root):
+    """Whether an SDK is absent, so that a stub has to stand in for it."""
     try:
-        importlib.import_module(_name)
-    except ImportError:
-        sys.modules[_name] = MagicMock()
+        return importlib.util.find_spec(root) is None
+    except (ImportError, ValueError):
+        return True
+
+
+class _MissingSDKFinder(importlib.abc.MetaPathFinder):
+    """
+    Serve a stub for every module of the cloud SDKs that are not installed.
+
+    skyway_batch imports every backend, but these tests exercise none of the
+    vendor APIs, and CI installs none of these SDKs. Listing the submodules by
+    hand is brittle - a stubbed 'azure' is not a package, so the real
+    azure.core.exceptions import behind it fails - hence a finder that answers
+    for an entire tree.
+
+    Only the roots that are really missing are served: an installed SDK must
+    keep importing its own internals, some of which (the vendored six in oci)
+    rely on import hooks of their own.
+    """
+
+    def __init__(self):
+        self.roots = tuple(root for root in ('boto3', 'botocore', 'oci', 'azure')
+                           if _missing(root))
+
+    class _Loader(importlib.abc.Loader):
+        def create_module(self, spec):
+            return MagicMock(name=spec.name, __path__=[], __spec__=spec)
+
+        def exec_module(self, module):
+            pass
+
+    def find_spec(self, name, path=None, target=None):
+        if name.split('.')[0] not in self.roots:
+            return None
+        return importlib.util.spec_from_loader(name, self._Loader(),
+                                               is_package=True)
+
+
+sys.meta_path.append(_MissingSDKFinder())
 
 _BATCH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                       'skyway_batch')
