@@ -46,6 +46,8 @@ def script2cmd(script_name: str):
                 continue
             if l[0] == '#':
                 continue
+            if l.startswith('skyway_'):
+                continue
             cmd += l + "; "
     return cmd
 
