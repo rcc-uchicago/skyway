@@ -194,7 +194,8 @@ class InstanceDescriptor:
         print(f"  Output: /tmp/skyway_job.log on the instance.")
         if auto_stop:
             print(f"  The instance will shut itself down when the job finishes.")
-            print(f"  Afterward, run: skyway_usage --reconcile -A {self.account_name} "
+            print(f"  Afterward, ask an admin to run: "
+                  f"skyway_usage --reconcile --apply -A {self.account_name} -u {self.user} "
                   f"to correct the usage record.")
         return 0
 
