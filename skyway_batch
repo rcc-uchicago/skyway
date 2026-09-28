@@ -181,8 +181,8 @@ class InstanceDescriptor:
                 os.unlink(tmp_path)
 
         remote_cmd = ('chmod +x /tmp/skyway_job.sh && '
-                      'nohup /tmp/skyway_job.sh > /tmp/skyway_job.log 2>&1 '
-                      '< /dev/null &')
+                      '{ nohup /tmp/skyway_job.sh > /tmp/skyway_job.log 2>&1 '
+                      '< /dev/null & }')
         result = utils.run_ssh(host, user_name, key, remote_cmd, run_timeout=30)
         if result is not None and result.returncode != 0:
             print(Fore.RED + f"Could not launch job on {self.jobname}: "
