@@ -8,7 +8,10 @@ import importlib.abc
 import importlib.machinery
 import importlib.util
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -92,7 +95,7 @@ class TestSubmitJob(unittest.TestCase):
     def test_releases_the_instance_after_the_script_finishes(self):
         descriptor = _make_descriptor()
 
-        descriptor.submitJob(script_name='job_script.sh')
+        descriptor.submitJob(script_name='job_script.sh', background=False)
 
         descriptor.account.execute_script.assert_called_once_with(
             'i-0123456789', 'job_script.sh')
@@ -104,14 +107,14 @@ class TestSubmitJob(unittest.TestCase):
         descriptor.account.execute_script.side_effect = \
             lambda *a, **kw: descriptor.account.release_node.assert_not_called()
 
-        descriptor.submitJob(script_name='job_script.sh')
+        descriptor.submitJob(script_name='job_script.sh', background=False)
 
         descriptor.account.release_node.assert_called_once_with('my-run')
 
     def test_no_auto_stop_leaves_the_instance_running(self):
         descriptor = _make_descriptor()
 
-        descriptor.submitJob(script_name='job_script.sh', auto_stop=False)
+        descriptor.submitJob(script_name='job_script.sh', background=False, auto_stop=False)
 
         descriptor.account.execute_script.assert_called_once()
         descriptor.account.release_node.assert_not_called()
@@ -119,7 +122,7 @@ class TestSubmitJob(unittest.TestCase):
     def test_releases_the_instance_when_the_script_fails(self):
         descriptor = _make_descriptor(script_status=17)
 
-        descriptor.submitJob(script_name='job_script.sh')
+        descriptor.submitJob(script_name='job_script.sh', background=False)
 
         descriptor.account.release_node.assert_called_once_with('my-run')
 
@@ -129,7 +132,7 @@ class TestSubmitJob(unittest.TestCase):
         descriptor.account.execute_script.side_effect = KeyboardInterrupt
 
         with self.assertRaises(KeyboardInterrupt):
-            descriptor.submitJob(script_name='job_script.sh')
+            descriptor.submitJob(script_name='job_script.sh', background=False)
 
         descriptor.account.release_node.assert_called_once_with('my-run')
 
@@ -138,7 +141,7 @@ class TestSubmitJob(unittest.TestCase):
         descriptor = _make_descriptor()
         descriptor.account.create_nodes.return_value = None
 
-        nodes = descriptor.submitJob(script_name='job_script.sh')
+        nodes = descriptor.submitJob(script_name='job_script.sh', background=False)
 
         self.assertIsNone(nodes)
         descriptor.account.execute_script.assert_not_called()
@@ -149,7 +152,7 @@ class TestSubmitJob(unittest.TestCase):
         descriptor = _make_descriptor()
         descriptor.account.get_instance_ID.return_value = ''
 
-        descriptor.submitJob(script_name='job_script.sh')
+        descriptor.submitJob(script_name='job_script.sh', background=False)
 
         descriptor.account.execute_script.assert_not_called()
         descriptor.account.release_node.assert_called_once_with('my-run')
@@ -158,7 +161,7 @@ class TestSubmitJob(unittest.TestCase):
         descriptor = _make_descriptor()
 
         with patch.object(skyway_batch.os, 'system') as mock_system:
-            descriptor.submitJob(script_name='job_script.sh',
+            descriptor.submitJob(script_name='job_script.sh', background=False,
                                  pre_execute=['skyway_transfer training.py'])
 
         mock_system.assert_called_once_with(
@@ -168,7 +171,7 @@ class TestSubmitJob(unittest.TestCase):
     def test_on_premises_job_is_addressed_by_host_name(self):
         descriptor = _make_descriptor(vendor_name='rcc-midway3')
 
-        descriptor.submitJob(script_name='job_script.sh')
+        descriptor.submitJob(script_name='job_script.sh', background=False)
 
         descriptor.account.get_instance_ID.assert_not_called()
         descriptor.account.execute_script.assert_called_once_with(
@@ -179,7 +182,7 @@ class TestSubmitJob(unittest.TestCase):
         descriptor = _make_descriptor(script_status=None)
 
         with patch('builtins.print') as mock_print:
-            descriptor.submitJob(script_name='job_script.sh')
+            descriptor.submitJob(script_name='job_script.sh', background=False)
 
         printed = ' '.join(str(c) for c in mock_print.call_args_list)
         self.assertIn('completed', printed)
@@ -203,7 +206,7 @@ class TestShutdownFallback(unittest.TestCase):
     def test_ssh_shutdown_is_armed_when_the_api_stop_fails(self):
         with patch.object(skyway_batch.utils, 'run_ssh',
                           return_value=MagicMock(returncode=0, stderr='')) as mock_ssh:
-            self.descriptor.submitJob(script_name='job_script.sh')
+            self.descriptor.submitJob(script_name='job_script.sh', background=False)
 
         mock_ssh.assert_called_once_with(
             '1.2.3.4', 'ubuntu', '/home/testuser/.my_aws_ssh_key.pem',
@@ -218,7 +221,7 @@ class TestShutdownFallback(unittest.TestCase):
         self.descriptor.account.release_node.side_effect = None
 
         with patch.object(skyway_batch.utils, 'run_ssh') as mock_ssh:
-            self.descriptor.submitJob(script_name='job_script.sh')
+            self.descriptor.submitJob(script_name='job_script.sh', background=False)
 
         mock_ssh.assert_not_called()
 
@@ -226,7 +229,7 @@ class TestShutdownFallback(unittest.TestCase):
         self.descriptor.account.get_instance_ID.return_value = ''
 
         with patch.object(skyway_batch.utils, 'run_ssh') as mock_ssh:
-            self.descriptor.submitJob(script_name='job_script.sh')
+            self.descriptor.submitJob(script_name='job_script.sh', background=False)
 
         mock_ssh.assert_not_called()
 
@@ -235,7 +238,7 @@ class TestShutdownFallback(unittest.TestCase):
         with patch.object(skyway_batch.utils, 'run_ssh',
                           return_value=MagicMock(returncode=255, stderr='no route to host')), \
              patch('builtins.print') as mock_print:
-            self.descriptor.submitJob(script_name='job_script.sh')
+            self.descriptor.submitJob(script_name='job_script.sh', background=False)
 
         printed = ' '.join(str(c) for c in mock_print.call_args_list)
         self.assertIn('skyway_stop', printed)
@@ -245,7 +248,7 @@ class TestShutdownFallback(unittest.TestCase):
             RuntimeError('no such instance')
 
         with patch('builtins.print') as mock_print:
-            self.descriptor.submitJob(script_name='job_script.sh')
+            self.descriptor.submitJob(script_name='job_script.sh', background=False)
 
         printed = ' '.join(str(c) for c in mock_print.call_args_list)
         self.assertIn('skyway_stop', printed)
@@ -257,11 +260,157 @@ class TestShutdownFallback(unittest.TestCase):
 
         with patch.object(skyway_batch.utils, 'run_ssh') as mock_ssh, \
              patch('builtins.print') as mock_print:
-            descriptor.submitJob(script_name='job_script.sh')
+            descriptor.submitJob(script_name='job_script.sh', background=False)
 
         mock_ssh.assert_not_called()
         printed = ' '.join(str(c) for c in mock_print.call_args_list)
         self.assertIn('skyway_cancel', printed)
+
+
+class TestBackgroundSubmission(unittest.TestCase):
+    """
+    In background mode the job script is copied to the instance and launched
+    under nohup, so that skyway_batch returns as soon as the job has started.
+    scp and ssh are mocked: no connection is ever attempted.
+    """
+
+    SCRIPT = ('#!/bin/bash\n'
+              '#SBATCH --time=01:00:00\n'
+              'skyway_transfer input.txt\n'
+              'echo hello\n'
+              'python train.py\n')
+
+    def setUp(self):
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmpdir.cleanup)
+        self.script = os.path.join(self.tmpdir.name, 'job_script.sh')
+        with open(self.script, 'w') as f:
+            f.write(self.SCRIPT)
+
+        self.descriptor = _make_descriptor()
+        self.descriptor.account.get_node_connection_info.return_value = {
+            'private_key': '/home/testuser/.my_aws_ssh_key.pem',
+            'login': 'ubuntu@1.2.3.4',
+        }
+        self.copied = []
+
+    def _scp(self, cmd, **kwargs):
+        """Stand-in for scp: keep the script it would have copied."""
+        with open(cmd[-2]) as f:
+            self.copied.append(f.read())
+        return MagicMock(returncode=self.scp_status, stderr='scp failed')
+
+    def _submit(self, scp_status=0, ssh_status=0, **kwargs):
+        self.scp_status = scp_status
+        with patch.object(skyway_batch.subprocess, 'run',
+                          side_effect=self._scp) as self.mock_scp, \
+             patch.object(skyway_batch.utils, 'run_ssh',
+                          return_value=MagicMock(returncode=ssh_status,
+                                                 stderr='ssh failed')) as self.mock_ssh, \
+             patch('builtins.print'):
+            self.descriptor.submitJob(script_name=self.script, **kwargs)
+
+    def _launch_cmd(self):
+        return self.mock_ssh.call_args.args[3]
+
+    def test_is_the_default_for_cloud_backends(self):
+        self._submit()
+
+        self.mock_scp.assert_called_once()
+        self.mock_ssh.assert_called_once()
+        self.descriptor.account.execute_script.assert_not_called()
+
+    def test_the_filtered_script_is_copied_to_the_instance(self):
+        self._submit()
+
+        scp_cmd = self.mock_scp.call_args.args[0]
+        self.assertEqual(scp_cmd[0], 'scp')
+        self.assertEqual(scp_cmd[-1], 'ubuntu@1.2.3.4:/tmp/skyway_job.sh')
+        script = self.copied[0]
+        self.assertIn('echo hello; python train.py;', script)
+        self.assertNotIn('#SBATCH', script)
+        self.assertNotIn('skyway_transfer', script)
+
+    def test_auto_stop_shuts_the_instance_down_after_the_job(self):
+        self._submit()
+
+        self.assertTrue(self.copied[0].rstrip().endswith('sudo shutdown -P now'))
+
+    def test_no_auto_stop_leaves_out_the_shutdown(self):
+        self._submit(auto_stop=False)
+
+        self.assertNotIn('shutdown', self.copied[0])
+        self.descriptor.account.release_node.assert_not_called()
+
+    def test_the_instance_is_not_released_once_the_job_is_running(self):
+        """The instance must stay up for the job: it shuts itself down."""
+        self._submit()
+
+        self.descriptor.account.release_node.assert_not_called()
+
+    def test_the_launch_is_bounded_by_a_timeout(self):
+        self._submit()
+
+        self.assertEqual(self.mock_ssh.call_args.kwargs['run_timeout'], 30)
+
+    def test_only_the_nohup_job_is_sent_to_the_background(self):
+        """
+        With a bare trailing '&' the whole 'chmod && nohup' list is backgrounded,
+        and the subshell running it keeps ssh's stdout open until the job ends.
+        """
+        self._submit()
+
+        cmd = self._launch_cmd()
+        self.assertIn('{ nohup /tmp/skyway_job.sh', cmd)
+        self.assertTrue(cmd.endswith('& }'))
+
+    @unittest.skipUnless(shutil.which('bash'), 'needs bash')
+    def test_the_launch_command_returns_while_the_job_runs(self):
+        """Run the launch command locally, reading its output as ssh would."""
+        self._submit()
+
+        job = os.path.join(self.tmpdir.name, 'skyway_job.sh')
+        with open(job, 'w') as f:
+            f.write('#!/bin/bash\nsleep 10\n')
+        cmd = (self._launch_cmd()
+               .replace('/tmp/skyway_job.sh', job)
+               .replace('/tmp/skyway_job.log', job + '.log'))
+
+        # a pipe on stdout, as for ssh: it only reaches EOF once no process
+        # holds its write end any more
+        try:
+            subprocess.run(['bash', '-c', cmd], capture_output=True, timeout=5)
+        except subprocess.TimeoutExpired:
+            self.fail('the launch command waited for the job to finish')
+
+    def test_a_failed_copy_releases_the_instance(self):
+        self._submit(scp_status=1)
+
+        self.mock_ssh.assert_not_called()
+        self.descriptor.account.release_node.assert_called_once_with('my-run')
+
+    def test_a_failed_launch_releases_the_instance(self):
+        self._submit(ssh_status=124)
+
+        self.descriptor.account.release_node.assert_called_once_with('my-run')
+
+    def test_the_copied_script_is_removed_locally(self):
+        self._submit()
+
+        local_copy = self.mock_scp.call_args.args[0][-2]
+        self.assertFalse(os.path.exists(local_copy))
+
+    def test_slurm_falls_back_to_blocking_mode(self):
+        descriptor = _make_descriptor(vendor_name='rcc-midway3')
+
+        with patch.object(skyway_batch.subprocess, 'run') as mock_scp, \
+             patch('builtins.print'):
+            descriptor.submitJob(script_name=self.script)
+
+        mock_scp.assert_not_called()
+        descriptor.account.execute_script.assert_called_once_with(
+            'midway3-0001', self.script)
+        descriptor.account.release_node.assert_called_once_with('my-run')
 
 
 class TestReleaseNode(unittest.TestCase):
