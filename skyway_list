@@ -68,6 +68,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=msg)
     parser.add_argument('-J', '--job-name',  dest='jobname', default="your-run", help="Job name")
     parser.add_argument('-A', '--account', dest='account', default="", help="Account name")
+    parser.add_argument('-u', '--user', dest='user', default="", help="Show only the instances of this user")
     
     args = parser.parse_args()
 
@@ -102,6 +103,12 @@ if __name__ == "__main__":
     headers=['Name', 'User', 'Status', 'Type', 'Instance ID', 'Host', 'Elapsed Time', 'Running Cost']
 
     nodes = instanceDescriptor.list_nodes()
+    if nodes and args.user != "":
+        if "midway3" in vendor_name:
+            # squeue already lists only the caller's jobs, and the rows carry no user column
+            nodes = nodes if args.user == os.environ['USER'] else []
+        else:
+            nodes = [node for node in nodes if node[1] == args.user]
 
     if nodes:
         df = pd.DataFrame(nodes, columns=headers)
