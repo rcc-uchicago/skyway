@@ -13,12 +13,13 @@ import io
 import logging
 import os
 import random
+import signal
 import subprocess
 from tabulate import tabulate
 import time
 import traceback
 
-from .core import Cloud, parse_walltime
+from .core import Cloud, parse_walltime, walltime_boot_script
 from .. import utils
 
 from colorama import Fore
@@ -494,6 +495,77 @@ class GCP(Cloud):
             print("", file=output_str)
         return nodes, output_str
 
+    def _cleanup_interrupted_create(self, node_name, is_tpu, state):
+        """
+        Delete an instance whose creation was interrupted (Ctrl-C) before the
+        walltime shutdown was armed over SSH, and close its usage row.
+
+        create_node() blocks until GCE finishes the insert, so an interrupt
+        there leaves no handle even though the instance exists; look it up by
+        name. Job names are user-chosen and may collide with an existing
+        instance, so only delete one created after this attempt started.
+        """
+        zone = state.get('zone')
+        if zone is None:
+            return
+        # a second Ctrl-C must not abandon the cleanup halfway
+        previous_handler = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        try:
+            print(f"\nInterrupted: deleting {node_name} so it does not run without a walltime timer, please wait ...")
+            try:
+                node = state.get('node')
+                if node is None:
+                    node, created = self._find_interrupted_node(node_name, zone, is_tpu)
+                    if node is None:
+                        print(f"No instance {node_name} was created in {zone}.")
+                        return
+                    if created < state['attempt_start'] - timedelta(minutes=2):
+                        print(f"{node_name} in {zone} predates this command; leaving it alone.")
+                        return
+                if is_tpu:
+                    self._destroy_tpu_node(node_name, zone)
+                else:
+                    self.driver.destroy_node(node)
+                print(f"Deleted {node_name}.")
+            except Exception as e:
+                print(f"WARNING: could not delete {node_name} in {zone}: {e}\n"
+                      f"         Run 'skyway_list' and 'skyway_cancel' on it now.")
+                return
+
+            if 'node_id' in state:
+                try:
+                    df = pd.read_pickle(self.usage_history)
+                    idx = self._find_session_row(df, state['node_id'], state['session_start'])
+                    if idx is not None:
+                        self._close_usage_row(df, idx, datetime.now(timezone.utc), state['unit_price'])
+                        df.to_pickle(self.usage_history)
+                except Exception as e:
+                    print(f"WARNING: could not close the usage row for {node_name}: {e}")
+        finally:
+            signal.signal(signal.SIGINT, previous_handler)
+
+    def _find_interrupted_node(self, node_name, zone, is_tpu, attempts=3):
+        """Return (node, creation time) for node_name in zone, or (None, None)."""
+        for attempt in range(attempts):
+            try:
+                if is_tpu:
+                    node = self.tpu_client.get_node(name=f"{self._tpu_parent(zone)}/nodes/{node_name}")
+                    return node, node.create_time
+                node = self.driver.ex_get_node(node_name, zone)
+                created = datetime.strptime(node.extra['creationTimestamp'], '%Y-%m-%dT%H:%M:%S.%f%z')
+                return node, created
+            except Exception as e:
+                not_found = isinstance(e, libcloud.common.google.ResourceNotFoundError)
+                if is_tpu:
+                    from google.api_core import exceptions as gapi_exc
+                    not_found = isinstance(e, gapi_exc.NotFound)
+                if not not_found:
+                    raise
+            # the insert may not be visible yet right after the request
+            if attempt < attempts - 1:
+                time.sleep(5)
+        return None, None
+
     def create_nodes(self, node_type: str, node_names = [], interactive = False, need_confirmation = True, walltime = None, image_id = "", location = ""):
         """Member function: create_compute
         Create a group of compute instances(nodes, servers, virtual-machines
@@ -583,157 +655,169 @@ class GCP(Cloud):
             public_key_from_pem = p.stdout.split(' ')[1].strip()
             user_name_pub_key = f"{user_name}:ssh-rsa {public_key_from_pem}"
 
-            # Phase 1: create node, retrying other US zones on failure
-            node_obj = None      # libcloud Node (GCE) or tpu_v2.Node (TPU)
-            node_id = None
-            node_size = None
-            creation_time_str = None
-            host = None
-            used_zone = None
-            zones_to_try = [preferred_zone]
+            # Everything up to the SSH shutdown call runs with no walltime timer
+            # armed from the client side; on Ctrl-C delete what was created.
+            interrupt_state = {}
+            try:
+                # Phase 1: create node, retrying other US zones on failure
+                node_obj = None      # libcloud Node (GCE) or tpu_v2.Node (TPU)
+                node_id = None
+                node_size = None
+                creation_time_str = None
+                host = None
+                used_zone = None
+                zones_to_try = [preferred_zone]
 
-            for zone_idx, zone in enumerate(zones_to_try):
-                created_node = None   # GCE only
-                created_tpu = None    # TPU only
-                try:
-                    if _is_tpu:
-                        created_tpu = self._create_tpu_node(
-                            node_name, node_cfg, zone, user_name, user_name_pub_key)
-                        host = self._get_tpu_external_ip(created_tpu)
-                        if host is None:
-                            raise RuntimeError(f"TPU VM {node_name} has no external IP; enable external IPs in the network config.")
-                        node_obj = created_tpu
-                        node_id = created_tpu.name
-                        node_size = node_cfg['tpu-type']
-                        creation_time_str = created_tpu.create_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
-                    else:
-                        subnet = self.resolve_subnetwork(network, zone, subnets)
-                        boot_disk_type = node_cfg.get('boot_disk_type', 'pd-standard')
-                        created_node = self.driver.create_node(node_name,
-                                                        size=node_cfg['name'],
-                                                        image=vm_image,
-                                                        location=zone,
-                                                        ex_network=network,
-                                                        ex_subnetwork=subnet,
-                                                        ex_service_accounts=[{
-                                                            'email': self.account['service_account'],
-                                                            'scopes': scopes
-                                                        }],
-                                                        ex_labels={'goog-ec-src': 'vm_add-gcloud', 'node_name': node_name, 'user': user_name},
-                                                        ex_preemptible=preemptible,
-                                                        ex_accelerator_type=gpu_type,
-                                                        ex_accelerator_count=gpu_count,
-                                                        ex_on_host_maintenance='TERMINATE',
-                                                        # GCE defaults automaticRestart to true: after a host
-                                                        # maintenance event it powers the VM back up, which
-                                                        # loses the in-guest walltime timer (systemd keeps
-                                                        # 'shutdown -P' state in /run) and records no usage
-                                                        # row, so the instance bills on unnoticed.
-                                                        ex_automatic_restart=False,
-                                                        ex_tags=tags,
-                                                        ex_metadata={'ssh-keys': user_name_pub_key},
-                                                        ex_disk_type=boot_disk_type)
-                        running = self.driver.wait_until_running([created_node])
-                        node_obj, _ = running[0]
-                        node_id = node_obj.id
-                        node_size = node_obj.size
-                        creation_time_str = node_obj.extra.get('creationTimestamp')
-                        host = node_obj.public_ips[0]
-
-                    used_zone = zone
-                    if zone != preferred_zone:
-                        print(f"  (using fallback zone: {zone})")
-                    break
-                except libcloud.common.google.ResourceNotFoundError as e:
-                    if getattr(e, 'value', {}).get('reason') != 'notFound':
-                        print(f'Zone {zone}: resource not found ({e})')
-                except libcloud.common.google.GoogleBaseError as e:
-                    print(f'Zone {zone}: Google Cloud error ({e})')
-                except Exception as e:
+                for zone_idx, zone in enumerate(zones_to_try):
+                    created_node = None   # GCE only
+                    created_tpu = None    # TPU only
+                    interrupt_state.update(zone=zone, attempt_start=datetime.now(timezone.utc))
                     try:
-                        from google.api_core import exceptions as gapi_exc
-                        if isinstance(e, gapi_exc.GoogleAPICallError):
-                            instance_type = node_cfg.get('tpu-type') if _is_tpu else node_cfg.get('name', node_type)
-                            #print(f'- Zone {zone}: {instance_type} is not available.')
+                        if _is_tpu:
+                            created_tpu = self._create_tpu_node(
+                                node_name, node_cfg, zone, user_name, user_name_pub_key)
+                            host = self._get_tpu_external_ip(created_tpu)
+                            if host is None:
+                                raise RuntimeError(f"TPU VM {node_name} has no external IP; enable external IPs in the network config.")
+                            node_obj = created_tpu
+                            node_id = created_tpu.name
+                            node_size = node_cfg['tpu-type']
+                            creation_time_str = created_tpu.create_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
                         else:
+                            subnet = self.resolve_subnetwork(network, zone, subnets)
+                            boot_disk_type = node_cfg.get('boot_disk_type', 'pd-standard')
+                            created_node = self.driver.create_node(node_name,
+                                                            size=node_cfg['name'],
+                                                            image=vm_image,
+                                                            location=zone,
+                                                            ex_network=network,
+                                                            ex_subnetwork=subnet,
+                                                            ex_service_accounts=[{
+                                                                'email': self.account['service_account'],
+                                                                'scopes': scopes
+                                                            }],
+                                                            ex_labels={'goog-ec-src': 'vm_add-gcloud', 'node_name': node_name, 'user': user_name},
+                                                            ex_preemptible=preemptible,
+                                                            ex_accelerator_type=gpu_type,
+                                                            ex_accelerator_count=gpu_count,
+                                                            ex_on_host_maintenance='TERMINATE',
+                                                            # GCE defaults automaticRestart to true: after a host
+                                                            # maintenance event it powers the VM back up, which
+                                                            # loses the in-guest walltime timer (systemd keeps
+                                                            # 'shutdown -P' state in /run) and records no usage
+                                                            # row, so the instance bills on unnoticed.
+                                                            ex_automatic_restart=False,
+                                                            ex_tags=tags,
+                                                            ex_metadata={'ssh-keys': user_name_pub_key,
+                                                                         'startup-script': walltime_boot_script(walltime_in_minutes)},
+                                                            ex_disk_type=boot_disk_type)
+                            running = self.driver.wait_until_running([created_node])
+                            node_obj, _ = running[0]
+                            node_id = node_obj.id
+                            node_size = node_obj.size
+                            creation_time_str = node_obj.extra.get('creationTimestamp')
+                            host = node_obj.public_ips[0]
+
+                        used_zone = zone
+                        interrupt_state['node'] = node_obj
+                        if zone != preferred_zone:
+                            print(f"  (using fallback zone: {zone})")
+                        break
+                    except libcloud.common.google.ResourceNotFoundError as e:
+                        if getattr(e, 'value', {}).get('reason') != 'notFound':
+                            print(f'Zone {zone}: resource not found ({e})')
+                    except libcloud.common.google.GoogleBaseError as e:
+                        print(f'Zone {zone}: Google Cloud error ({e})')
+                    except Exception as e:
+                        try:
+                            from google.api_core import exceptions as gapi_exc
+                            if isinstance(e, gapi_exc.GoogleAPICallError):
+                                instance_type = node_cfg.get('tpu-type') if _is_tpu else node_cfg.get('name', node_type)
+                                #print(f'- Zone {zone}: {instance_type} is not available.')
+                            else:
+                                print(f'Zone {zone}: {e}')
+                                traceback.print_exc()
+                        except ImportError:
                             print(f'Zone {zone}: {e}')
                             traceback.print_exc()
-                    except ImportError:
-                        print(f'Zone {zone}: {e}')
-                        traceback.print_exc()
-                finally:
-                    if node_obj is None:
-                        if created_tpu is not None:
-                            try:
-                                self._destroy_tpu_node(node_name, zone)
-                            except Exception:
-                                pass
-                        elif created_node is not None:
-                            try:
-                                self.driver.destroy_node(created_node)
-                            except Exception:
-                                pass
+                    finally:
+                        if node_obj is None:
+                            if created_tpu is not None:
+                                try:
+                                    self._destroy_tpu_node(node_name, zone)
+                                except Exception:
+                                    pass
+                            elif created_node is not None:
+                                try:
+                                    self.driver.destroy_node(created_node)
+                                except Exception:
+                                    pass
 
-                # lazily fetch fallback zones on the first failure
-                if zone_idx == 0 and node_obj is None:
-                    fallbacks = [z for z in self.get_locations() if z != preferred_zone]
-                    zones_to_try.extend(fallbacks)
-                    #print(f"  Retry in other US zones:")
+                    # lazily fetch fallback zones on the first failure
+                    if zone_idx == 0 and node_obj is None:
+                        fallbacks = [z for z in self.get_locations() if z != preferred_zone]
+                        zones_to_try.extend(fallbacks)
+                        #print(f"  Retry in other US zones:")
 
-            if node_obj is None:
-                print(f"Failed to create {node_name} in any available US zone.")
-                continue
+                if node_obj is None:
+                    print(f"Failed to create {node_name} in any available US zone.")
+                    continue
 
-            # Phase 2: record, schedule shutdown, post-boot
-            creation_time = datetime.strptime(creation_time_str, '%Y-%m-%dT%H:%M:%S.%f%z')
-            nodes[node_name] = [node_size, creation_time_str, host]
+                # Phase 2: record, schedule shutdown, post-boot
+                creation_time = datetime.strptime(creation_time_str, '%Y-%m-%dT%H:%M:%S.%f%z')
+                nodes[node_name] = [node_size, creation_time_str, host]
 
-            print(f'\n✓ Created instance: {node_name} in {used_zone}\n')
+                print(f'\n✓ Created instance: {node_name} in {used_zone}\n')
 
-            user_name = os.environ['USER']
+                user_name = os.environ['USER']
 
-            running_time = timedelta(hours=walltime_hours)
-            instance_unit_cost = self.get_unit_price_instance(node_obj)
-            projected_running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
-            usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
-            end_time = creation_time + running_time
-            end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+                running_time = timedelta(hours=walltime_hours)
+                instance_unit_cost = self.get_unit_price_instance(node_obj)
+                projected_running_cost = running_time.total_seconds()/3600.0 * instance_unit_cost
+                usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
+                end_time = creation_time + running_time
+                end_time_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
 
-            data = [user_name, node_id, node_size,
-                    creation_time_str, end_time_str, projected_running_cost, remaining_balance]
+                data = [user_name, node_id, node_size,
+                        creation_time_str, end_time_str, projected_running_cost, remaining_balance]
 
-            if os.path.isfile(self.usage_history):
-                df = pd.read_pickle(self.usage_history)
-            else:
-                df = pd.DataFrame([], columns=['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
-
-            df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
-            df.to_pickle(self.usage_history)
-
-            print("✓ Preparing the instance...")
-            time.sleep(30)
-            try:
-                utils.ssh_until_success(
-                    host,
-                    user_name,
-                    self.my_ssh_private_key,
-                    f"sudo shutdown -P +{walltime_in_minutes}",
-                )
-            except RuntimeError as e:
-                print(f"SSH setup failed for {node_name}: {str(e)}. Terminating instance to avoid unbounded charges.")
-                if _is_tpu:
-                    try:
-                        self._destroy_tpu_node(node_name, used_zone)
-                    except Exception:
-                        pass
+                if os.path.isfile(self.usage_history):
+                    df = pd.read_pickle(self.usage_history)
                 else:
-                    try:
-                        self.driver.destroy_node(node_obj)
-                    except Exception:
-                        pass
-                nodes.pop(node_name, None)
-                traceback.print_exc()
-                continue
+                    df = pd.DataFrame([], columns=['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance'])
+
+                df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
+                df.to_pickle(self.usage_history)
+                interrupt_state.update(node_id=node_id, session_start=creation_time,
+                                       unit_price=instance_unit_cost)
+
+                print("✓ Preparing the instance...")
+                time.sleep(30)
+                try:
+                    utils.ssh_until_success(
+                        host,
+                        user_name,
+                        self.my_ssh_private_key,
+                        f"sudo shutdown -P +{walltime_in_minutes}",
+                    )
+                except RuntimeError as e:
+                    print(f"SSH setup failed for {node_name}: {str(e)}. Terminating instance to avoid unbounded charges.")
+                    if _is_tpu:
+                        try:
+                            self._destroy_tpu_node(node_name, used_zone)
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            self.driver.destroy_node(node_obj)
+                        except Exception:
+                            pass
+                    nodes.pop(node_name, None)
+                    traceback.print_exc()
+                    continue
+            except KeyboardInterrupt:
+                self._cleanup_interrupted_create(node_name, _is_tpu, interrupt_state)
+                raise
 
             if self.post_boot_script != "":
                 print("✓ Running the post boot script...")
@@ -965,6 +1049,18 @@ class GCP(Cloud):
                         automatic_restart=False)
                 except Exception as e:
                     print(f"WARNING: could not disable automaticRestart for "
+                          f"{node.name}: {e}")
+
+                # GCE reruns the startup-script on every boot, so point it at
+                # this session's walltime; otherwise the creation walltime would
+                # be armed at boot and could race the SSH shutdown below.
+                try:
+                    items = node.extra.get('metadata', {}).get('items', [])
+                    metadata = {item['key']: item['value'] for item in items}
+                    metadata['startup-script'] = walltime_boot_script(walltime_in_minutes)
+                    self.driver.ex_set_node_metadata(node, metadata)
+                except Exception as e:
+                    print(f"WARNING: could not update the walltime startup-script for "
                           f"{node.name}: {e}")
 
                 self.driver.ex_start_node(node)

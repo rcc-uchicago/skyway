@@ -16,7 +16,7 @@ import subprocess
 from tabulate import tabulate
 import traceback
 
-from .core import Cloud, parse_walltime
+from .core import Cloud, parse_walltime, walltime_boot_script
 from .. import utils
 
 from colorama import Fore
@@ -222,6 +222,9 @@ class AWS(Cloud):
             InstanceType     = self.vendor['node-types'][node_type]['name'],
             MaxCount         = count,
             MinCount         = count,
+            # cloud-init runs user data once per instance, so the walltime
+            # holds even if this command is interrupted before the SSH step
+            UserData         = walltime_boot_script(walltime_in_minutes),
             TagSpecifications=[
                 {
                     'ResourceType' : 'instance',

@@ -6,10 +6,11 @@ import os
 import shutil
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import libcloud.common.google
+import pandas as pd
 from skyway.cloud.gcp import GCP
 
 # A fixed GCP-format timestamp accepted by datetime.strptime(..., '%Y-%m-%dT%H:%M:%S.%f%z')
@@ -322,6 +323,87 @@ class TestCreateNodes(GCPTestCase):
         self.assertEqual(nodes, {})
 
 
+class TestCreateNodesInterrupted(GCPTestCase):
+    """Ctrl-C before the SSH `shutdown -P` must not leave an instance running
+    with no walltime timer."""
+
+    def _now_ts(self, minutes_ago=0):
+        t = datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)
+        return t.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+
+    def _create(self, ssh_side_effect=None):
+        self._stub_finances()
+        with patch.dict(os.environ, {'USER': 'testuser', 'SKYWAYROOT': '/tmp'}), \
+             patch('subprocess.run',
+                   return_value=MagicMock(stdout='ssh-rsa AAAA key', returncode=0)), \
+             patch('skyway.cloud.gcp.time.sleep'), \
+             patch('skyway.cloud.gcp.utils.ssh_until_success',
+                   MagicMock(side_effect=ssh_side_effect)):
+            return self.gcp.create_nodes('t1', ['test-node'],
+                                         need_confirmation=False,
+                                         walltime='00:30:00')
+
+    def test_startup_script_arms_the_walltime(self):
+        fresh_node = _make_node()
+        self.gcp.driver.create_node.return_value = fresh_node
+        self.gcp.driver.wait_until_running.return_value = [(fresh_node, ['1.2.3.4'])]
+        self._create()
+
+        metadata = self.gcp.driver.create_node.call_args.kwargs['ex_metadata']
+        self.assertIn('shutdown -P +30', metadata['startup-script'])
+        self.assertIn('ssh-keys', metadata)
+
+    def test_interrupt_inside_create_node_deletes_the_instance_by_name(self):
+        """create_node blocks until the insert finishes, so there is no handle
+        yet; the instance must be found by name and deleted."""
+        self.gcp.driver.create_node.side_effect = KeyboardInterrupt
+        orphan = _make_node()
+        orphan.extra['creationTimestamp'] = self._now_ts()
+        self.gcp.driver.ex_get_node.return_value = orphan
+
+        with self.assertRaises(KeyboardInterrupt):
+            self._create()
+
+        self.gcp.driver.ex_get_node.assert_called_with('test-node', 'us-central1-b')
+        self.gcp.driver.destroy_node.assert_called_once_with(orphan)
+
+    def test_interrupt_leaves_an_older_instance_with_the_same_name(self):
+        self.gcp.driver.create_node.side_effect = KeyboardInterrupt
+        existing = _make_node()
+        existing.extra['creationTimestamp'] = self._now_ts(minutes_ago=60)
+        self.gcp.driver.ex_get_node.return_value = existing
+
+        with self.assertRaises(KeyboardInterrupt):
+            self._create()
+
+        self.gcp.driver.destroy_node.assert_not_called()
+
+    def test_interrupt_when_nothing_was_created(self):
+        self.gcp.driver.create_node.side_effect = KeyboardInterrupt
+        self.gcp.driver.ex_get_node.side_effect = \
+            libcloud.common.google.ResourceNotFoundError('not found', 404, 'notFound')
+
+        with self.assertRaises(KeyboardInterrupt):
+            self._create()
+
+        self.gcp.driver.destroy_node.assert_not_called()
+
+    def test_interrupt_before_ssh_deletes_node_and_closes_usage_row(self):
+        fresh_node = _make_node()
+        fresh_node.extra['creationTimestamp'] = self._now_ts(minutes_ago=1)
+        self.gcp.driver.create_node.return_value = fresh_node
+        self.gcp.driver.wait_until_running.return_value = [(fresh_node, ['1.2.3.4'])]
+
+        with self.assertRaises(KeyboardInterrupt):
+            self._create(ssh_side_effect=KeyboardInterrupt)
+
+        self.gcp.driver.destroy_node.assert_called_once_with(fresh_node)
+        df = pd.read_pickle(self.gcp.usage_history)
+        self.assertEqual(len(df), 1)
+        # about one minute at $0.1/hr, not the 30-minute projection ($0.05)
+        self.assertLess(df.loc[0, 'Cost'], 0.01)
+
+
 # ---------------------------------------------------------------------------
 # restart_nodes
 # ---------------------------------------------------------------------------
@@ -356,6 +438,34 @@ class TestRestartNodes(GCPTestCase):
         ssh_mock.assert_called_once()
         host_arg = ssh_mock.call_args[0][0]
         self.assertEqual(host_arg, '9.8.7.6')
+
+    def test_startup_script_is_updated_to_the_restart_walltime(self):
+        """GCE reruns the startup-script on every boot; it must carry the new
+        walltime, and the update must keep the other metadata (ssh-keys)."""
+        stale_node = _make_node(state='stopped', public_ips=[])
+        stale_node.extra['metadata'] = {'items': [
+            {'key': 'ssh-keys', 'value': 'testuser:ssh-rsa AAAA'},
+            {'key': 'startup-script', 'value': '#!/bin/bash\nshutdown -P +5\n'},
+        ]}
+        fresh_node = _make_node(state='running', public_ips=['9.8.7.6'])
+        self.gcp.driver.list_nodes.return_value = [stale_node]
+        self.gcp.driver.wait_until_running.return_value = [(fresh_node, ['9.8.7.6'])]
+        self.gcp.get_instance_user_name = MagicMock(return_value='testuser')
+        self._stub_finances()
+
+        with patch.dict(os.environ, {'USER': 'testuser', 'SKYWAYROOT': '/tmp'}), \
+             patch('skyway.cloud.gcp.time.sleep'), \
+             patch('skyway.cloud.gcp.utils.ssh_until_success'), \
+             patch('skyway.cloud.gcp.pd') as mock_pd:
+            mock_pd.DataFrame.return_value = MagicMock()
+            mock_pd.concat.return_value = MagicMock()
+            self.gcp.restart_nodes(node_names=['test-node'],
+                                   need_confirmation=False, walltime='02:00:00')
+
+        node_arg, metadata = self.gcp.driver.ex_set_node_metadata.call_args[0]
+        self.assertIs(node_arg, stale_node)
+        self.assertIn('shutdown -P +120', metadata['startup-script'])
+        self.assertEqual(metadata['ssh-keys'], 'testuser:ssh-rsa AAAA')
 
 
 # ---------------------------------------------------------------------------

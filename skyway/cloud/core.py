@@ -23,6 +23,19 @@ def parse_walltime(walltime_str):
     return total_minutes / 60, total_minutes
 
 
+def walltime_boot_script(walltime_in_minutes):
+    """
+    Boot script that arms the walltime shutdown from inside the instance.
+
+    The SSH `shutdown -P` sent after launch only happens if the client gets
+    that far; interrupting skyway_interactive/skyway_batch while it is waiting
+    on the cloud API leaves a running instance with no timer. Passing this as
+    GCE startup-script / EC2 user data lets the instance arm the timer itself.
+    The later SSH call reschedules the same shutdown, so the two do not conflict.
+    """
+    return f"#!/bin/bash\nshutdown -P +{walltime_in_minutes}\n"
+
+
 # Provide the API for child classes to override
 
 class Cloud():
