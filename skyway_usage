@@ -37,6 +37,31 @@ def _is_projection(cost, unit_price):
     return rounded >= 1 and abs(implied_minutes - rounded) <= _MINUTE_EPSILON
 
 
+def _not_latest_run(df, indices):
+    """
+    Return the subset of indices whose row is not the unique most recent run of
+    its instance across the whole usage history.
+
+    The cloud APIs only report an instance's latest stop time, so it can only
+    close that instance's latest row. Pricing an earlier row of a restarted
+    instance up to that stop time would charge the overlapping hours twice.
+    Rows are also excluded when the order is unknown: a tie on the latest start,
+    or another row of the same instance with an unparseable start.
+    """
+    starts = pd.to_datetime(df['Start'], format='mixed', utc=True, errors='coerce')
+    iids = df['InstanceID'].astype(str)
+    excluded = set()
+    for idx in indices:
+        same = starts[iids == iids[idx]]
+        if same.isna().any():
+            excluded.add(idx)
+            continue
+        latest = same.max()
+        if starts[idx] != latest or (same == latest).sum() > 1:
+            excluded.add(idx)
+    return excluded
+
+
 def _aws_stop_time(account, instance_id):
     """
     Return the actual stop time for a stopped AWS instance, or None.
@@ -139,12 +164,17 @@ def _reconcile(account, vendor_name, user_name, apply_changes):
     print(f"Found {len(stale_indices)} stale row(s) for '{user_name}'; "
           f"querying cloud for actual stop times...")
 
-    repaired, skipped = [], []
+    repaired, skipped, not_latest = [], [], []
+    excluded = _not_latest_run(df, stale_indices)
 
     for idx in stale_indices:
         row = df.loc[idx]
         iid = str(row['InstanceID'])
         price = account.get_unit_price_by_name(row['InstanceType'])
+
+        if idx in excluded:
+            not_latest.append(idx)
+            continue
 
         if vendor_name == 'aws':
             stop_time = _aws_stop_time(account, iid)
@@ -179,6 +209,13 @@ def _reconcile(account, vendor_name, user_name, apply_changes):
             'delta': new_cost - old_cost,
         })
 
+    if not_latest:
+        print(f"  {len(not_latest)} row(s) skipped: not the most recent run of a "
+              f"restarted instance, so the cloud's last stop time does not apply:")
+        for idx in not_latest:
+            row = df.loc[idx]
+            print(f"    {row['InstanceID']}  Start {row['Start']}  Cost ${float(row['Cost']):.4f}")
+        print("  Close these with skyway_history --close-at-walltime if needed.")
     if skipped:
         print(f"  {len(skipped)} instance(s) skipped: still running, stop time "
               f"unavailable, or vendor not supported (OCI/Azure).")
