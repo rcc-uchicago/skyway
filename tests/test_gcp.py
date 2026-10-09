@@ -321,6 +321,39 @@ class TestCreateNodes(GCPTestCase):
             )
 
         self.assertEqual(nodes, {})
+        self.assertFalse(self.gcp.capacity_exhausted)
+
+    def test_stockout_in_every_zone_is_quiet_and_flagged(self):
+        """A stockout is summarized once, not printed for each zone, and
+        flags the request as retriable for skyway_batch --retry."""
+        import libcloud.common.google
+        self.gcp.driver.create_node.side_effect = libcloud.common.google.GoogleBaseError(
+            "The zone 'projects/p/zones/us-central1-a' does not have enough resources "
+            "available to fulfill the request. (state:STOCKOUT, sub-state:STOCKOUT, "
+            "resource type:compute).", 200, None)
+
+        loc1 = MagicMock(); loc1.name = 'us-central1-b'
+        loc2 = MagicMock(); loc2.name = 'us-east1-a'
+        self.gcp.driver.list_locations.return_value = [loc1, loc2]
+        self._stub_finances()
+
+        with patch.dict(os.environ, {'USER': 'testuser', 'SKYWAYROOT': '/tmp'}), \
+             patch('subprocess.run',
+                   return_value=MagicMock(stdout='ssh-rsa AAAA key', returncode=0)), \
+             patch('skyway.cloud.gcp.time.sleep'), \
+             patch('builtins.print') as mock_print:
+            nodes = self.gcp.create_nodes(
+                't1', ['test-node'],
+                need_confirmation=False,
+                walltime='00:30:00',
+            )
+
+        self.assertEqual(nodes, {})
+        self.assertTrue(self.gcp.capacity_exhausted)
+        self.assertEqual(self.gcp.driver.create_node.call_count, 2)   # both zones scanned
+        printed = ' '.join(str(c) for c in mock_print.call_args_list)
+        self.assertNotIn('STOCKOUT', printed)
+        self.assertIn('out of capacity', printed)
 
 
 class TestCreateNodesInterrupted(GCPTestCase):

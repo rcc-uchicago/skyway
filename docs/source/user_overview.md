@@ -201,6 +201,12 @@ To keep the instance running after the job script finishes (until the walltime i
   skyway_batch --no-auto-stop job_script.sh
   ```
 
+If the requested instance type is out of capacity in every zone (common for GPU instances), you can let `skyway_batch` keep retrying until one becomes available:
+  ```
+  skyway_batch --retry --retry-interval=10 --max-attempts=10 job_script.sh
+  ```
+Each attempt scans all the zones again; `--retry-interval` is the wait between attempts in minutes (default 10) and `--max-attempts` the total number of attempts, including the first one (default 10). Only capacity errors are retried: a request that fails for another reason (insufficient budget, quota, credentials) stops right away. The command waits in the foreground while retrying, so run it inside `tmux` or `screen` if you need to disconnect.
+
 Transfer output data from cloud
   ```
   skyway_transfer -A your-cloud-account -J your-run --from-cloud --cloud-path=~/model*.pkl .

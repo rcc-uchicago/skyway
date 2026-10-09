@@ -17,7 +17,7 @@ from tabulate import tabulate
 import time
 import traceback
 
-from .core import Cloud, parse_walltime
+from .core import Cloud, parse_walltime, is_capacity_error
 from .. import utils
 
 from colorama import Fore
@@ -150,6 +150,7 @@ class OCI(Cloud):
         
         Return: a dictionary of instance ID (i.e., names) for created instances.
         """
+        self.capacity_exhausted = False
         if node_type not in self.vendor['node-types']:
             raise Exception(f'Node type {node_type} is not available in this account.')
 
@@ -219,6 +220,7 @@ class OCI(Cloud):
 
         instance_type_name = self.vendor['node-types'][node_type]['name']
         instance = None
+        capacity_hit = False  # some AD was out of stock
         for ad_idx, availability_domain in enumerate(ads_to_try):
             print(f"\nLocation: {availability_domain.name}\n")
             instance_details = oci.core.models.LaunchInstanceDetails(
@@ -246,6 +248,7 @@ class OCI(Cloud):
                     print(f"  (using fallback AD: {availability_domain.name})")
                 break
             except oci.exceptions.ServiceError as e:
+                capacity_hit = capacity_hit or is_capacity_error(e)
                 #print(f'- AD {availability_domain.name}: {instance_type_name} is not available.')
                 if ad_idx == 0 and len(ads_to_try) > 1:
                     pass
@@ -253,6 +256,7 @@ class OCI(Cloud):
 
         if instance is None:
             print(f"Failed to create {node_name} in any available AD.")
+            self.capacity_exhausted = capacity_hit
             return {}
 
         nodes = {}

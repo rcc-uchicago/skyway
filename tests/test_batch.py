@@ -188,6 +188,102 @@ class TestSubmitJob(unittest.TestCase):
         self.assertIn('completed', printed)
 
 
+class TestRetryOnCapacity(unittest.TestCase):
+    """--retry repeats the zone scan only when it failed for lack of capacity."""
+
+    def _descriptor(self, results, capacity_exhausted=True):
+        descriptor = _make_descriptor()
+        descriptor.account.create_nodes.side_effect = results
+        descriptor.account.capacity_exhausted = capacity_exhausted
+        return descriptor
+
+    def test_retries_until_an_instance_is_available(self):
+        descriptor = self._descriptor([{}, {}, {'my-run': ['t1', 'now', '1.2.3.4']}])
+
+        with patch.object(skyway_batch.time, 'sleep') as mock_sleep:
+            nodes = descriptor.requestNodes(retry=True, retry_interval=5)
+
+        self.assertEqual(nodes, {'my-run': ['t1', 'now', '1.2.3.4']})
+        self.assertEqual(descriptor.account.create_nodes.call_count, 3)
+        mock_sleep.assert_called_with(300)
+
+    def test_no_retry_without_the_option(self):
+        descriptor = self._descriptor([{}])
+
+        with patch.object(skyway_batch.time, 'sleep') as mock_sleep:
+            nodes = descriptor.requestNodes(retry=False)
+
+        self.assertEqual(nodes, {})
+        mock_sleep.assert_not_called()
+
+    def test_failures_other_than_capacity_are_not_retried(self):
+        """Budget, quota or credential failures do not clear up by waiting."""
+        descriptor = self._descriptor([None], capacity_exhausted=False)
+
+        with patch.object(skyway_batch.time, 'sleep') as mock_sleep:
+            nodes = descriptor.requestNodes(retry=True)
+
+        self.assertIsNone(nodes)
+        mock_sleep.assert_not_called()
+
+    def test_gives_up_after_max_attempts(self):
+        descriptor = self._descriptor([{}, {}, {}, {}])
+
+        with patch.object(skyway_batch.time, 'sleep') as mock_sleep:
+            nodes = descriptor.requestNodes(retry=True, retry_interval=30, max_attempts=3)
+
+        self.assertEqual(nodes, {})
+        self.assertEqual(descriptor.account.create_nodes.call_count, 3)
+        self.assertEqual(mock_sleep.call_count, 2)   # no wait after the last attempt
+        mock_sleep.assert_called_with(1800)
+
+    def test_default_is_ten_attempts(self):
+        descriptor = self._descriptor([{}] * 11)
+
+        with patch.object(skyway_batch.time, 'sleep'):
+            descriptor.requestNodes(retry=True)
+
+        self.assertEqual(descriptor.account.create_nodes.call_count, 10)
+
+    def test_submit_job_runs_the_script_once_the_instance_is_up(self):
+        descriptor = self._descriptor([{}, {'my-run': ['t1', 'now', '1.2.3.4']}])
+
+        with patch.object(skyway_batch.time, 'sleep'):
+            descriptor.submitJob(script_name='job_script.sh', background=False, retry=True)
+
+        descriptor.account.execute_script.assert_called_once_with(
+            'i-0123456789', 'job_script.sh')
+
+
+class TestCapacityErrorClassification(unittest.TestCase):
+
+    def test_stockout_errors_are_recognized(self):
+        from skyway.cloud.core import is_capacity_error
+
+        class CodedError(Exception):
+            def __init__(self, code, msg):
+                super().__init__(msg)
+                self.code = code
+
+        self.assertTrue(is_capacity_error(CodedError(
+            'ZONE_RESOURCE_POOL_EXHAUSTED',
+            "The zone 'us-central1-a' does not have enough resources available")))
+        # as printed by skyway_batch on GCP, with no error code attached
+        self.assertTrue(is_capacity_error(Exception(
+            "The zone 'projects/lgagliardi-gcp/zones/us-central1-a' does not have enough "
+            "resources available to fulfill the request. (state:STOCKOUT, sub-state:STOCKOUT, "
+            "resource type:compute).")))
+        self.assertTrue(is_capacity_error(Exception(
+            'An error occurred (InsufficientInstanceCapacity) when calling RunInstances')))
+        self.assertTrue(is_capacity_error(Exception('Out of host capacity.')))
+
+    def test_quota_and_other_errors_are_not(self):
+        from skyway.cloud.core import is_capacity_error
+
+        self.assertFalse(is_capacity_error(Exception("QUOTA_EXCEEDED: Quota 'GPUS_ALL_REGIONS' exceeded")))
+        self.assertFalse(is_capacity_error(Exception('Permission denied')))
+
+
 class TestShutdownFallback(unittest.TestCase):
     """
     When the instance cannot be stopped through the cloud API, skyway_batch

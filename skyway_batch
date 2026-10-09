@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from subprocess import PIPE, Popen
 
 import colorama
@@ -52,7 +53,35 @@ class InstanceDescriptor:
 
         self.user = os.environ['USER']
 
-    def submitJob(self, script_name=None, pre_execute=[], auto_stop=True, background=True):
+    def requestNodes(self, retry=False, retry_interval=10, max_attempts=10):
+        """
+        Create the instance. With retry, a request that failed because every
+        zone of the scan was out of capacity is repeated (with a new full scan)
+        every retry_interval minutes, up to max_attempts scans in total. Any
+        other failure (budget, quota, credentials, configuration) is returned
+        at once, since waiting would not change the outcome.
+        """
+        attempt = 1
+        while True:
+            nodes = self.account.create_nodes(self.node_type, [self.jobname], need_confirmation=False, walltime=self.walltime)
+            if nodes or not retry:
+                return nodes
+            if getattr(self.account, 'capacity_exhausted', False) is not True:
+                return nodes
+
+            if attempt >= max_attempts:
+                print(Fore.RED + f"{self.node_type} is still out of capacity after "
+                      f"{attempt} attempts; giving up.")
+                return nodes
+
+            print(Fore.YELLOW + f"{self.node_type} is out of capacity in every zone "
+                  f"(attempt {attempt}/{max_attempts}); retrying in {retry_interval:g} minutes. "
+                  f"Press Ctrl-C to cancel.")
+            time.sleep(retry_interval * 60)
+            attempt += 1
+
+    def submitJob(self, script_name=None, pre_execute=[], auto_stop=True, background=True,
+                  retry=False, retry_interval=10, max_attempts=10):
         # Background mode is not available for Slurm: there is no in-guest way
         # to cancel a Slurm allocation, so the node would stay up until walltime
         # if the script tries to shut itself down.
@@ -62,7 +91,7 @@ class InstanceDescriptor:
             background = False
 
         print(Fore.BLUE + f"Requesting node from {self.vendor_name} with account {self.account_name}")
-        nodes = self.account.create_nodes(self.node_type, [self.jobname], need_confirmation=False, walltime=self.walltime)
+        nodes = self.requestNodes(retry=retry, retry_interval=retry_interval, max_attempts=max_attempts)
 
         # create_nodes returns None when the budget check fails or the request
         # was declined, and {} when no instance came up: there is nothing to
@@ -329,8 +358,21 @@ if __name__ == "__main__":
                              "returning (the old default); by default skyway_batch "
                              "submits the script in background and returns immediately "
                              "so you can disconnect from the login node")
+    parser.add_argument('--retry', action='store_true',
+                        help="If the instance type is out of capacity in every zone, "
+                             "keep retrying the full zone scan until an instance is "
+                             "available (other failures are not retried)")
+    parser.add_argument('--retry-interval', type=float, default=10, metavar='MINUTES',
+                        help="Minutes to wait between retries (default: 10, minimum: 1)")
+    parser.add_argument('--max-attempts', type=int, default=10, metavar='N',
+                        help="With --retry, the maximum number of zone scans, "
+                             "including the first one (default: 10)")
     parser.add_argument(dest='script', help="Job script to submit")
     cli_args = parser.parse_args()
+    if cli_args.retry_interval < 1:
+        parser.error("--retry-interval must be at least 1 minute")
+    if cli_args.max_attempts < 1:
+        parser.error("--max-attempts must be at least 1")
 
     script = cli_args.script
     auto_stop = cli_args.auto_stop
@@ -372,4 +414,6 @@ if __name__ == "__main__":
 
     # submit job
     instanceDescriptor.submitJob(script_name=script, pre_execute=skyway_cmds,
-                                 auto_stop=auto_stop, background=background)
+                                 auto_stop=auto_stop, background=background,
+                                 retry=cli_args.retry, retry_interval=cli_args.retry_interval,
+                                 max_attempts=cli_args.max_attempts)

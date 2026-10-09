@@ -36,10 +36,34 @@ def walltime_boot_script(walltime_in_minutes):
     return f"#!/bin/bash\nshutdown -P +{walltime_in_minutes}\n"
 
 
+# Error codes/messages the providers return when a zone has run out of the
+# requested instance type. Quota errors are left out on purpose: they do not
+# clear up by waiting, so retrying on them would only spin until the timeout.
+CAPACITY_ERROR_MARKERS = (
+    'resource_pool_exhausted',          # GCE ZONE_RESOURCE_POOL_EXHAUSTED[_WITH_DETAILS]
+    'does not have enough resources',   # GCE message for the above
+    'stockout',                         # GCE
+    'no more capacity',                 # Cloud TPU
+    'insufficientinstancecapacity',     # AWS
+    'insufficient capacity',            # AWS
+    'out of host capacity',             # OCI
+)
+
+
+def is_capacity_error(exc):
+    """True if exc reports that the zone is out of stock for the instance type."""
+    text = f"{getattr(exc, 'code', '') or ''} {exc}".lower()
+    return any(marker in text for marker in CAPACITY_ERROR_MARKERS)
+
+
 # Provide the API for child classes to override
 
 class Cloud():
-    
+
+    # Set by create_nodes when no instance could be created and at least one
+    # zone of the scan was out of capacity, i.e. the request may succeed later.
+    capacity_exhausted = False
+
     def __init__(self, vendor_cfg, kwargs):
         self.vendor = vendor_cfg
         self.onpremises = False

@@ -16,7 +16,7 @@ import subprocess
 from tabulate import tabulate
 import traceback
 
-from .core import Cloud, parse_walltime, walltime_boot_script
+from .core import Cloud, parse_walltime, walltime_boot_script, is_capacity_error
 from .. import utils
 
 from colorama import Fore
@@ -171,6 +171,7 @@ class AWS(Cloud):
         
         Return: a dictionary of instance ID (i.e., names) for created instances.
         """
+        self.capacity_exhausted = False
         if node_type not in self.vendor['node-types']:
             raise Exception(f'Node type {node_type} is not available in this account.')
 
@@ -246,6 +247,7 @@ class AWS(Cloud):
         instance_type_name = self.vendor['node-types'][node_type]['name']
 
         instances = None
+        capacity_hit = False  # some zone was out of stock
         for zone_idx, zone in enumerate(zones_to_try):
             attempt_kwargs = dict(**create_kwargs)
             if zone:
@@ -260,6 +262,7 @@ class AWS(Cloud):
             except botocore.exceptions.ClientError as e:
                 code = e.response['Error']['Code']
                 if code in ('InsufficientInstanceCapacity', 'Unsupported'):
+                    capacity_hit = capacity_hit or is_capacity_error(e)
                     #print(f'- Zone {zone or "auto"}: {instance_type_name} is not available.')
                     if len(zones_to_try) == 1:
                         all_azs = [az['ZoneName'] for az in
@@ -274,6 +277,7 @@ class AWS(Cloud):
 
         if instances is None:
             print(f"Failed to create {node_name} in any available zone.")
+            self.capacity_exhausted = capacity_hit
             return {}
 
         nodes = {}

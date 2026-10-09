@@ -19,7 +19,7 @@ from tabulate import tabulate
 import time
 import traceback
 
-from .core import Cloud, parse_walltime, walltime_boot_script
+from .core import Cloud, parse_walltime, walltime_boot_script, is_capacity_error
 from .. import utils
 
 from colorama import Fore
@@ -576,6 +576,7 @@ class GCP(Cloud):
 
         Return: a dictionary of instance ID (i.e., names) for created instances.
         """
+        self.capacity_exhausted = False
         if node_type not in self.vendor['node-types']:
             raise Exception(f'Node type {node_type} is not available in this account.')
 
@@ -666,6 +667,7 @@ class GCP(Cloud):
                 creation_time_str = None
                 host = None
                 used_zone = None
+                capacity_hit = False  # some zone was out of stock
                 zones_to_try = [preferred_zone]
 
                 for zone_idx, zone in enumerate(zones_to_try):
@@ -727,11 +729,18 @@ class GCP(Cloud):
                         if getattr(e, 'value', {}).get('reason') != 'notFound':
                             print(f'Zone {zone}: resource not found ({e})')
                     except libcloud.common.google.GoogleBaseError as e:
-                        print(f'Zone {zone}: Google Cloud error ({e})')
+                        # a stockout is expected in many zones during the scan:
+                        # summarized once below instead of printed per zone
+                        if is_capacity_error(e):
+                            capacity_hit = True
+                        else:
+                            print(f'Zone {zone}: Google Cloud error ({e})')
                     except Exception as e:
                         try:
                             from google.api_core import exceptions as gapi_exc
-                            if isinstance(e, gapi_exc.GoogleAPICallError):
+                            if is_capacity_error(e):
+                                capacity_hit = True
+                            elif isinstance(e, gapi_exc.GoogleAPICallError):
                                 instance_type = node_cfg.get('tpu-type') if _is_tpu else node_cfg.get('name', node_type)
                                 #print(f'- Zone {zone}: {instance_type} is not available.')
                             else:
@@ -761,6 +770,9 @@ class GCP(Cloud):
 
                 if node_obj is None:
                     print(f"Failed to create {node_name} in any available US zone.")
+                    if capacity_hit:
+                        print(f"  {node_type} is out of capacity in the zones that offer it.")
+                        self.capacity_exhausted = True
                     continue
 
                 # Phase 2: record, schedule shutdown, post-boot
