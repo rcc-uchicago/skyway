@@ -242,16 +242,16 @@ class SLURMCluster(Cloud):
         
         output_str = ''
         if verbose == True:
-            print(tabulate(nodes, headers=['Name', 'Status', 'Type', 'Instance ID', 'Host', 'Elapsed Time', 'Running Cost']))
+            print(tabulate(nodes, headers=['Name', 'Status', 'Type', 'Instance ID', 'Host', 'Elapsed Time', 'Running Cost'], maxcolwidths=None))
             print("")
         else:
             output_str = io.StringIO()
-            print(tabulate(nodes, headers=['Name', 'Status', 'Type', 'Instance ID', 'Host', 'Elapsed Time', 'Running Cost']), file=output_str)
+            print(tabulate(nodes, headers=['Name', 'Status', 'Type', 'Instance ID', 'Host', 'Elapsed Time', 'Running Cost'], maxcolwidths=None), file=output_str)
             print("", file=output_str)
         return nodes, output_str
 
 
-    def create_nodes(self, node_type: str, node_names = [], interactive = False, need_confirmation = True, walltime = None, image_id = ""):
+    def create_nodes(self, node_type: str, node_names = [], interactive = False, need_confirmation = True, walltime = None, image_id = "", location = ""):
         '''
         create several nodes (aka instances) given a list of node names using salloc
         for SLURM it is a wrapper of salloc
@@ -271,7 +271,7 @@ class SLURMCluster(Cloud):
             if response == 'n':
                 return
 
-        if walltime is None:
+        if walltime is None or walltime == "":
             walltime_str = "01:00:00"
         else:
             walltime_str = walltime
@@ -322,6 +322,25 @@ class SLURMCluster(Cloud):
         }
         return node_info
 
+    def stop_nodes(self, IDs=[], node_names=[], need_confirmation=True):
+        print("stop_nodes is not supported for Slurm/on-premises clusters.")
+
+    def restart_nodes(self, IDs=[], node_names=[], need_confirmation=True, walltime=None):
+        print("restart_nodes is not supported for Slurm/on-premises clusters.")
+
+    def release_node(self, node_name):
+        '''
+        release the allocation of a job as soon as the work on it is done
+
+        A Slurm allocation has no stopped state, so cancelling the job is what
+        frees the node and closes its usage record (see destroy_nodes).
+        '''
+        job_id = self.get_instance_ID(node_name)
+        if job_id is None:
+            print(f"No running job named {node_name} to release.")
+            return
+        self.destroy_nodes(IDs=[job_id], need_confirmation=False)
+
     def destroy_nodes(self, IDs = [], need_confirmation=True):
         '''
         destroy several nodes (aka instances) given a list of node names using scancel
@@ -331,24 +350,23 @@ class SLURMCluster(Cloud):
         # maybe no need to check if the job ID belongs the current user because scancel will throw errors otherwise
 
         for instanceID in IDs:
-            print(f"Cancelling job {instanceID}")
-            
+
             user_name = os.environ['USER']
             # job_id state job_name account nodelist   runningtime starttime comment user_name"
             cmd = f"export SQUEUE_FORMAT=\"%13i %.4t %24j %16a %N %M %V %k %u\"; squeue -j {instanceID} -h"
-
             proc = subprocess.Popen([cmd], stdout=subprocess.PIPE, shell=True)
             (out, err) = proc.communicate()
         
             # encode output as utf-8 from bytes, remove newline character
             line = out.decode('utf-8').strip()
 
-            
             node_info = line.split()
 
             job_user_name = node_info[8]
             if job_user_name != user_name:
+                print(f"Cannot destroy an instance {instanceID} created by other users")
                 continue
+
             jobid = node_info[0]
             state = node_info[1]        
             job_name = node_info[2]     
@@ -371,7 +389,16 @@ class SLURMCluster(Cloud):
                 print(f"Running time: {running_time} {time_stamp}")
 
             running_cost = running_time_hours * unit_price
-        
+
+            if need_confirmation == True: 
+                response = input(f"Do you want to terminate the job {instanceID} (running cost ${running_cost:0.5f})? NOTE: Data on the node will be removed. (y/n) ")
+                if response != 'y':
+                    continue
+
+            print(f"Cancelling job {instanceID}")
+            cmd = f"scancel {instanceID}"
+            os.system(cmd)
+
             # store the record into the database
             usage, remaining_balance = self.get_cost_and_usage_from_db(user_name=user_name)
             data = [job_user_name, jobid, instance_type, start_time, datetime.now(timezone.utc), running_cost, remaining_balance]
@@ -384,8 +411,6 @@ class SLURMCluster(Cloud):
             df = pd.concat([pd.DataFrame([data], columns=df.columns), df], ignore_index=True)
             df.to_pickle(self.usage_history)
 
-            cmd = f"scancel {instanceID}"
-            os.system(cmd)
 
     def get_running_nodes(self, verbose=False):
         '''
@@ -452,9 +477,10 @@ class SLURMCluster(Cloud):
             print("", file=output_str)
         return nodes, output_str
 
-    def get_running_cost(self, verbose=True):
+    def get_running_cost(self, verbose=True, user_name=None):
         total_cost = 0.0
-        user_name = os.environ['USER']
+        if user_name is None:
+            user_name = os.environ['USER']
 
         # job_id state job_name account nodelist   runningtime starttime comment user_name"
         cmd = f"export SQUEUE_FORMAT=\"%13i %.4t %24j %16a %N %M %V %k %u\"; squeue -u {user_name} -h"
@@ -512,10 +538,12 @@ class SLURMCluster(Cloud):
     def execute_script(self, node_name: str, script_name: str):
         '''
         execute all the lines in a script on a compute node
+        Return: the exit status of the script (0 on success), so that callers
+                like skyway_batch can report how the job ended.
         '''
         script_cmd = utils.script2cmd(script_name)
         cmd = f"ssh  -o StrictHostKeyChecking=accept-new {node_name} -t 'eval {script_cmd}' "
-        os.system(cmd)
+        return utils.exit_code(os.system(cmd))
 
     def get_instance_ID(self, instance_name: str):
         '''

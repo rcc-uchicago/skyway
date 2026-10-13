@@ -1,0 +1,1093 @@
+#!/usr/bin/env python
+"""
+skyway_history - Show per-job usage history, amend missing PKL entries, and
+repair costs left at their launch-time projection.
+
+Usage:
+  skyway_history -A rcc-gcp -u username
+  skyway_history -A rcc-gcp -u username --amend INSTANCE_ID [--dry-run]
+  skyway_history -A rcc-gcp -u username --repair-cost [--apply]
+  skyway_history -A rcc-gcp -u username --from-cloud [--apply]
+
+The --amend flag detects whether the instance has an unrecorded session
+(i.e., it was restarted after the last PKL entry) and prepends the missing row.
+The cost written reflects elapsed time since the last restart; stop_nodes or
+destroy_nodes will overwrite the End timestamp when the instance is eventually
+stopped, but Cost stays fixed (matching the rest of the accounting design).
+
+The --repair-cost flag reconciles rows written before Cloud._close_usage_row()
+existed. Back then create_nodes() wrote Cost as a projection
+(walltime x unit price), and stop_nodes/destroy_nodes overwrote End without
+recomputing Cost -- so short jobs were over-charged and overruns under-charged.
+Repair is dry-run unless --apply is given; see _repair_cost() for how rows are
+classified and which ones are deliberately left alone.
+
+The --from-cloud flag (GCP only) skips the inference entirely and rebuilds
+Start/End/Cost from the Compute Engine operations log, which records the real
+insert/start/stop/guestTerminate/delete events. It is the authoritative option
+where the operations are still retained; --repair-cost is the fallback for
+older jobs GCE has already aged out.
+"""
+import argparse
+import os
+import shutil
+import sys
+from datetime import datetime, timezone
+
+import pandas as pd
+from tabulate import tabulate
+
+import skyway
+from skyway.cloud.aws import AWS
+from skyway.cloud.gcp import GCP
+from skyway.cloud.azure import AZURE
+from skyway.cloud.oci import OCI
+
+SUPPORTED_VENDORS = ('aws', 'gcp', 'oci', 'azure')
+
+
+def _infer_vendor(account_name, provider_arg):
+    if provider_arg:
+        return provider_arg.lower()
+    for keyword in ('aws', 'gcp', 'azure', 'oci'):
+        if keyword in account_name:
+            return keyword
+    return None
+
+
+def _make_account(account_name, vendor_name):
+    if vendor_name == 'aws':
+        return AWS(account_name)
+    if vendor_name == 'gcp':
+        return GCP(account_name)
+    if vendor_name == 'azure':
+        return AZURE(account_name)
+    if vendor_name == 'oci':
+        return OCI(account_name)
+    return None
+
+
+def _parse_ts(ts):
+    """Parse a timestamp string that may or may not have fractional seconds."""
+    if isinstance(ts, datetime):
+        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+    for fmt in ('%Y-%m-%dT%H:%M:%S.%f%z', '%Y-%m-%dT%H:%M:%S%z'):
+        try:
+            return datetime.strptime(ts, fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"Cannot parse timestamp: {ts!r}")
+
+
+def _find_instance(account, vendor_name, instance_id):
+    """Return the instance object matching instance_id, or None."""
+    if vendor_name == 'aws':
+        for inst in account.get_instances():
+            if inst.instance_id == instance_id:
+                return inst
+    elif vendor_name == 'gcp':
+        for node in account.driver.list_nodes():
+            if node.id == instance_id:
+                return node
+    elif vendor_name == 'oci':
+        for inst in account.get_instances():
+            if inst.id == instance_id:
+                return inst
+    elif vendor_name == 'azure':
+        from azure.mgmt.compute import ComputeManagementClient
+        cc = ComputeManagementClient(account.credentials,
+                                     account.account['subscription_id'])
+        for vm in cc.virtual_machines.list_all():
+            if vm.vm_id == instance_id:
+                return vm
+    return None
+
+
+_GCP_API_CACHE = {}
+
+
+def _gcp_api_instance(instance):
+    """
+    Return the raw Compute Engine representation of a libcloud GCE node.
+
+    libcloud's GCE driver does not map lastStartTimestamp/lastStopTimestamp into
+    node.extra, so an instance that was stopped and started again still looks
+    like it has been running since creationTimestamp. Read the fields from the
+    API instead. Returns {} if the lookup fails.
+    """
+    if instance.id in _GCP_API_CACHE:
+        return _GCP_API_CACHE[instance.id]
+    obj = {}
+    try:
+        self_link = instance.extra.get('selfLink')
+        if self_link:
+            path = self_link.split('/projects/' + str(instance.driver.project), 1)[-1]
+            obj = instance.driver.connection.request(path).object or {}
+    except Exception as e:
+        print(f"WARNING: could not read start/stop times from the API: {e}")
+    _GCP_API_CACHE[instance.id] = obj
+    return obj
+
+
+def _get_last_start_time(instance, vendor_name):
+    """
+    Return the most recent start time of the instance as a timezone-aware datetime.
+
+    GCP: prefers lastStartTimestamp (resets on each start) over creationTimestamp.
+    AWS: launch_time resets on each start/restart — already the right value.
+    OCI/Azure: only creation time is readily available; we fall back to it.
+    """
+    if vendor_name == 'gcp':
+        ts = (_gcp_api_instance(instance).get('lastStartTimestamp')
+              or instance.extra.get('creationTimestamp'))
+        if ts:
+            return _parse_ts(ts)
+    elif vendor_name == 'aws':
+        return instance.launch_time
+    elif vendor_name == 'oci':
+        return _parse_ts(instance.time_created)
+    elif vendor_name == 'azure':
+        if hasattr(instance, 'time_created') and instance.time_created:
+            return _parse_ts(instance.time_created)
+    return None
+
+
+def _get_instance_type(instance, vendor_name):
+    if vendor_name == 'aws':
+        return str(instance.instance_type)
+    elif vendor_name == 'gcp':
+        return instance.size or ''
+    elif vendor_name == 'oci':
+        return instance.shape or ''
+    elif vendor_name == 'azure':
+        return instance.hardware_profile.vm_size if instance.hardware_profile else ''
+    return ''
+
+
+def _load_pkl(account):
+    if os.path.isfile(account.usage_history):
+        return pd.read_pickle(account.usage_history)
+    return pd.DataFrame([], columns=['User', 'InstanceID', 'InstanceType',
+                                     'Start', 'End', 'Cost', 'Balance'])
+
+
+def _show_history(account, user_name):
+    df = _load_pkl(account)
+    df_user = df.loc[df['User'] == user_name]
+    if df_user.empty:
+        print(f"No history found for user '{user_name}'.")
+    else:
+        print(df_user[['User', 'InstanceID', 'InstanceType', 'Start', 'End',
+                        'Cost', 'Balance']].to_string(index=False))
+
+
+def _amend(account, vendor_name, instance_id, user_name, dry_run):
+    # --- locate instance ---
+    instance = _find_instance(account, vendor_name, instance_id)
+    if instance is None:
+        print(f"ERROR: Instance '{instance_id}' not found in {vendor_name} account.")
+        sys.exit(1)
+
+    # --- verify ownership ---
+    owner = account.get_instance_user_name(instance)
+    if owner != user_name:
+        print(f"ERROR: Instance '{instance_id}' belongs to '{owner}', not '{user_name}'.")
+        sys.exit(1)
+
+    # --- get last restart time ---
+    last_start = _get_last_start_time(instance, vendor_name)
+    if last_start is None:
+        print(f"ERROR: Cannot determine last start time for '{instance_id}'.")
+        sys.exit(1)
+
+    now = datetime.now(timezone.utc)
+
+    # --- inspect PKL ---
+    df = _load_pkl(account)
+    df_inst = df[df['InstanceID'] == instance_id]
+
+    if df_inst.empty:
+        max_end = None
+        print(f"Instance '{instance_id}' has no PKL entries at all.")
+    else:
+        # Stored timestamps are heterogeneous (offset with/without colon,
+        # 3- or 6-digit fractional seconds), so parse per-value rather than
+        # assuming a single format.
+        ends = pd.to_datetime(df_inst['End'], format='mixed', utc=True,
+                              errors='coerce')
+        n_bad = int(ends.isna().sum())
+        if n_bad:
+            print(f"WARNING: {n_bad} of {len(ends)} End value(s) for this "
+                  f"instance could not be parsed.")
+        ends = ends.dropna()
+        if ends.empty:
+            # Rows exist but none has a usable End: refuse to guess, since
+            # amending here could double-count an already-recorded session.
+            print(f"ERROR: '{instance_id}' has {len(df_inst)} PKL row(s) but no "
+                  f"parseable End timestamp. Inspect them manually before amending:")
+            print(df_inst.to_string(index=False))
+            sys.exit(1)
+        max_end = ends.max()
+        print(f"Most recent PKL End for '{instance_id}': {max_end}")
+
+    print(f"API last start time:                        {last_start}")
+
+    # --- gap check (allow 5-minute tolerance for clock skew) ---
+    GAP_TOLERANCE = pd.Timedelta(minutes=5)
+    if max_end is not None and last_start <= max_end + GAP_TOLERANCE:
+        print("\nNo unrecorded session detected — last_start is not after the most recent PKL End.")
+        print("Nothing to amend.")
+        return
+
+    # --- when did the unrecorded session end? ---
+    # A running instance is still accruing, so bill up to now. One that has
+    # already been stopped ended at lastStopTimestamp; using now would bill the
+    # idle time since the stop.
+    end_time = now
+    end_source = "now"
+    if vendor_name == 'gcp':
+        api = _gcp_api_instance(instance)
+        stop_ts = api.get('lastStopTimestamp')
+        if api.get('status') == 'TERMINATED' and stop_ts:
+            stop_dt = _parse_ts(stop_ts)
+            if stop_dt > last_start:
+                end_time = stop_dt
+                end_source = "API lastStopTimestamp"
+
+    # --- compute cost for the unrecorded session ---
+    elapsed_h = (end_time - last_start).total_seconds() / 3600.0
+    unit_price = account.get_unit_price_instance(instance)
+    if unit_price < 0:
+        print(f"WARNING: unit price not found for instance type '{_get_instance_type(instance, vendor_name)}'; cost will be 0.")
+        unit_price = 0.0
+    session_cost = elapsed_h * unit_price
+
+    accumulated = float(account.get_cost_and_usage_from_db(user_name=user_name)[0])
+    budget = float(account.get_budget(user_name=user_name, verbose=False))
+    # balance after this session is recorded
+    remaining_balance = budget - accumulated - session_cost
+
+    instance_type = _get_instance_type(instance, vendor_name)
+    start_str = last_start.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+    end_str = end_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+
+    row = [user_name, instance_id, instance_type, start_str, end_str,
+           session_cost, remaining_balance]
+    cols = ['User', 'InstanceID', 'InstanceType', 'Start', 'End', 'Cost', 'Balance']
+
+    print(f"\nProposed row to prepend to {account.usage_history}:")
+    print(tabulate([row], headers=cols, floatfmt='.4f'))
+    print(f"\nNotes:")
+    print(f"  Start = API lastStartTimestamp ({start_str})")
+    if end_source == "now":
+        print(f"  End   = now ({end_str}) — will be overwritten by stop_nodes/destroy_nodes")
+    else:
+        print(f"  End   = {end_source} ({end_str}) — session already closed on the cloud side")
+    print(f"  Cost  = {elapsed_h:.3f}h × ${unit_price}/h = ${session_cost:.4f}")
+    if end_source == "now":
+        print(f"          (covers elapsed time to now; any runtime after this amend is NOT included)")
+
+    if dry_run:
+        print("\n[DRY RUN] No changes made.")
+        return
+
+    confirm = input("\nPrepend this row to the PKL? (y/n) ")
+    if confirm.strip().lower() != 'y':
+        print("Aborted — no changes made.")
+        return
+
+    df_new = pd.concat([pd.DataFrame([row], columns=cols), df], ignore_index=True)
+    df_new.to_pickle(account.usage_history)
+    print(f"Done. PKL updated: {account.usage_history}")
+
+
+# --- cost repair ---------------------------------------------------------
+
+# Cost is stored to full float precision, so anything beyond rounding noise on
+# a sub-cent job is a genuine mismatch.
+COST_TOLERANCE = 0.005
+
+# Walltime always comes from parse_walltime(), which returns total_minutes/60.
+# A stale projection therefore satisfies Cost == (whole minutes / 60) * price.
+# Allow half a second of slack for float round-tripping.
+MINUTE_EPSILON = 0.01
+
+# create_nodes() schedules `shutdown -P +walltime` on the instance, so a row
+# whose End implies it ran far past its own walltime points at a bad End
+# timestamp rather than a real overrun. Repairing those would bill the user for
+# time the shutdown timer says they could not have used.
+SUSPECT_RUNTIME_FACTOR = 2.0
+
+
+def _classify_row(row, unit_price):
+    """
+    Decide what to do with one usage row.
+
+    Returns (status, info) where info carries whatever the caller needs to
+    report or repair. Statuses:
+      'consistent'    Cost already equals elapsed x unit_price -- nothing to do.
+      'stale'         Cost is a launch-time projection (a whole-minute walltime
+                      at the current unit price) that survived the End rewrite.
+      'suspect'       Same as 'stale', but the recorded runtime overshoots the
+                      implied walltime by more than SUSPECT_RUNTIME_FACTOR, so
+                      the End timestamp itself is doubtful.
+      'ambiguous'     Cost disagrees with elapsed x unit_price but is not a
+                      whole-minute projection either -- most likely the unit
+                      price in cloud.yaml changed since this job ran.
+      'no-price'      Instance type is not in cloud.yaml (or is a placeholder).
+      'bad-time'      Start or End cannot be parsed, or End precedes Start.
+    """
+    if unit_price is None or unit_price <= 0:
+        return 'no-price', {}
+
+    start = pd.to_datetime(row['Start'], format='mixed', utc=True, errors='coerce')
+    end = pd.to_datetime(row['End'], format='mixed', utc=True, errors='coerce')
+    if pd.isna(start) or pd.isna(end) or end < start:
+        return 'bad-time', {}
+
+    try:
+        old_cost = float(row['Cost'])
+    except (TypeError, ValueError):
+        return 'bad-time', {}
+    if pd.isna(old_cost):
+        return 'bad-time', {}
+
+    elapsed_h = (end - start).total_seconds() / 3600.0
+    new_cost = elapsed_h * unit_price
+    info = {'start': start, 'end': end, 'elapsed_h': elapsed_h,
+            'old_cost': old_cost, 'new_cost': new_cost,
+            'delta': new_cost - old_cost}
+
+    if abs(new_cost - old_cost) <= COST_TOLERANCE:
+        return 'consistent', info
+
+    implied_minutes = old_cost / unit_price * 60.0
+    rounded = round(implied_minutes)
+    if rounded < 1 or abs(implied_minutes - rounded) > MINUTE_EPSILON:
+        return 'ambiguous', info
+
+    info['walltime_h'] = rounded / 60.0
+    if elapsed_h > SUSPECT_RUNTIME_FACTOR * info['walltime_h']:
+        return 'suspect', info
+    return 'stale', info
+
+
+def _backup_pkl(account):
+    """Snapshot the ledger next to itself before any in-place rewrite."""
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    backup = f"{account.usage_history}.bak-{stamp}"
+    shutil.copy2(account.usage_history, backup)
+    print(f"Backup written: {backup}")
+    return backup
+
+
+def _rebalance_users(df, account, users):
+    """
+    Rewrite the per-row Balance column for the given users as a running ledger
+    in chronological order: budget - cumulative Cost. Returns the number of
+    rows updated.
+
+    Destructive to history: the Balance column otherwise records the balance as
+    it stood when each row was written, so a mid-history budget increase shows
+    up as an upward jump. Rebuilding from today's budget flattens that away.
+    """
+    updated = 0
+    order = pd.to_datetime(df['Start'], format='mixed', utc=True, errors='coerce')
+    for user in users:
+        if user not in account.users:
+            print(f"  skipping rebalance for '{user}': not in this account's user list")
+            continue
+        budget = float(account.users[user]['budget'])
+        mask = (df['User'] == user) & order.notna()
+        running = 0.0
+        for idx in order[mask].sort_values().index:
+            try:
+                cost = float(df.loc[idx, 'Cost'])
+            except (TypeError, ValueError):
+                cost = float('nan')
+            if pd.isna(cost):
+                # A single unusable Cost would poison every later balance.
+                print(f"  {user}: row {idx} has an unusable Cost; "
+                      f"Balance left untouched from here on")
+                break
+            running += cost
+            df.loc[idx, 'Balance'] = budget - running
+            updated += 1
+        n_skipped = int(((df['User'] == user) & order.isna()).sum())
+        if n_skipped:
+            print(f"  {user}: {n_skipped} row(s) with an unparseable Start left untouched")
+    return updated
+
+
+def _repair_cost(account, user_name, all_users, instance_id,
+                 rebalance, apply_changes, assume_yes):
+    df = _load_pkl(account)
+    if df.empty:
+        print("Usage history is empty — nothing to repair.")
+        return
+
+    mask = pd.Series(True, index=df.index)
+    if not all_users:
+        mask &= df['User'] == user_name
+    if instance_id:
+        mask &= df['InstanceID'].astype(str) == str(instance_id)
+    targets = df.index[mask]
+    if len(targets) == 0:
+        print("No rows matched the given user/instance filter.")
+        return
+
+    scope = "all users" if all_users else f"user '{user_name}'"
+    if instance_id:
+        scope += f", instance '{instance_id}'"
+    print(f"Auditing {len(targets)} row(s) in {account.usage_history} ({scope})\n")
+
+    buckets = {k: [] for k in ('consistent', 'stale', 'suspect', 'ambiguous',
+                               'no-price', 'bad-time')}
+    for idx in targets:
+        row = df.loc[idx]
+        price = account.get_unit_price_by_name(row['InstanceType'])
+        status, info = _classify_row(row, price)
+        buckets[status].append((idx, row, price, info))
+
+    def _table(entries):
+        rows = []
+        for idx, row, price, info in entries:
+            rows.append([idx, row['User'], str(row['InstanceID'])[:20],
+                         row['InstanceType'],
+                         info['start'].strftime('%Y-%m-%d %H:%M'),
+                         info.get('walltime_h', float('nan')),
+                         info['elapsed_h'], price,
+                         info['old_cost'], info['new_cost'], info['delta']])
+        return tabulate(rows, headers=['idx', 'User', 'InstanceID', 'Type',
+                                       'Start (UTC)', 'Walltime_h', 'Actual_h',
+                                       '$/h', 'OldCost', 'NewCost', 'Delta'],
+                        floatfmt='.4f')
+
+    to_repair = list(buckets['stale'])
+
+    if buckets['stale']:
+        print(f"Stale launch-time projections ({len(buckets['stale'])}) — will be repaired:")
+        print(_table(buckets['stale']))
+        print("")
+
+    if buckets['suspect']:
+        print(f"Suspect runtime ({len(buckets['suspect'])}) — recorded runtime exceeds "
+              f"{SUSPECT_RUNTIME_FACTOR:g}x the walltime the projection implies, so the "
+              f"End timestamp is questionable. Cost is NOT recomputed from it "
+              f"(that would bill the bogus runtime); use --close-at-walltime "
+              f"to repair the End instead:")
+        print(_table(buckets['suspect']))
+        print("")
+
+    if buckets['ambiguous']:
+        print(f"Ambiguous ({len(buckets['ambiguous'])}) — Cost does not match elapsed x "
+              f"today's price, and is not a whole-minute projection either "
+              f"(the unit price in cloud.yaml has most likely changed since these ran). "
+              f"Left untouched:")
+        print(_table(buckets['ambiguous']))
+        print("")
+
+    for status, label in (('no-price', 'unknown instance type (not in cloud.yaml)'),
+                          ('bad-time', 'unparseable or inverted Start/End')):
+        if buckets[status]:
+            ids = ', '.join(str(r['InstanceID'])[:20] for _, r, _, _ in buckets[status][:10])
+            more = ' ...' if len(buckets[status]) > 10 else ''
+            print(f"Skipped — {label} ({len(buckets[status])}): {ids}{more}\n")
+
+    print(f"Summary: {len(buckets['consistent'])} already consistent, "
+          f"{len(buckets['stale'])} stale, {len(buckets['suspect'])} suspect, "
+          f"{len(buckets['ambiguous'])} ambiguous, "
+          f"{len(buckets['no-price']) + len(buckets['bad-time'])} unusable.")
+
+    if not to_repair:
+        print("\nNothing to repair.")
+        return
+
+    per_user = {}
+    for _, row, _, info in to_repair:
+        per_user[row['User']] = per_user.get(row['User'], 0.0) + info['delta']
+    print("\nNet Cost change per user (negative = user was over-charged):")
+    print(tabulate(sorted(per_user.items()), headers=['User', 'Delta ($)'],
+                   floatfmt='.4f'))
+
+    if not apply_changes:
+        print(f"\n[DRY RUN] {len(to_repair)} row(s) would be rewritten. "
+              f"Re-run with --apply to write.")
+        return
+
+    if not assume_yes:
+        confirm = input(f"\nRewrite Cost on {len(to_repair)} row(s) in "
+                        f"{account.usage_history}? (y/n) ")
+        if confirm.strip().lower() != 'y':
+            print("Aborted — no changes made.")
+            return
+
+    _backup_pkl(account)
+
+    for idx, _, _, info in to_repair:
+        df.loc[idx, 'Cost'] = info['new_cost']
+
+    if rebalance:
+        print("Rebalancing the Balance column (budget - cumulative Cost, "
+              "chronological); this flattens any past budget adjustments:")
+        n = _rebalance_users(df, account, sorted(per_user))
+        print(f"  {n} row(s) rebalanced")
+    else:
+        print("NOTE: the per-row Balance column is a snapshot from when each row "
+              "was written and was left as-is. The balance reported by "
+              "skyway_usage is derived from Cost and is now correct. "
+              "Pass --rebalance to rewrite the column too.")
+
+    df.to_pickle(account.usage_history)
+    print(f"Done. PKL updated: {account.usage_history}")
+
+
+def _close_at_walltime(account, user_name, all_users, instance_id,
+                       apply_changes, assume_yes):
+    """
+    Repair 'suspect' rows by rewriting End, not Cost.
+
+    A suspect row pairs a launch-time Cost projection with an End that is far
+    past the walltime that projection implies. In practice the End is a
+    batch-close artifact -- a sweep stamped 'now' on every stale row it found,
+    seconds apart -- so the runtime it encodes never happened. Recomputing Cost
+    from it would bill the artifact. The projection is the trustworthy half, so
+    keep it and move End to Start + walltime, which is what the job was
+    scheduled to do and (where cloud data survives to check) what it did.
+
+    Cost is left alone, so balances do not move.
+    """
+    df = _load_pkl(account)
+    if df.empty:
+        print("Usage history is empty — nothing to repair.")
+        return
+
+    mask = pd.Series(True, index=df.index)
+    if not all_users:
+        mask &= df['User'] == user_name
+    if instance_id:
+        mask &= df['InstanceID'].astype(str) == str(instance_id)
+    targets = df.index[mask]
+    if len(targets) == 0:
+        print("No rows matched the given user/instance filter.")
+        return
+
+    scope = "all users" if all_users else f"user '{user_name}'"
+    if instance_id:
+        scope += f", instance '{instance_id}'"
+    print(f"Auditing {len(targets)} row(s) in {account.usage_history} ({scope})\n")
+
+    changed = []
+    for idx in targets:
+        row = df.loc[idx]
+        price = account.get_unit_price_by_name(row['InstanceType'])
+        status, info = _classify_row(row, price)
+        if status != 'suspect':
+            continue
+        new_end = info['start'] + pd.Timedelta(hours=info['walltime_h'])
+        changed.append((idx, row, info, new_end))
+
+    if not changed:
+        print("No suspect rows — nothing to repair.")
+        return
+
+    print(f"Suspect rows ({len(changed)}) — End rewritten to Start + walltime, "
+          f"Cost left as recorded:")
+    print(tabulate(
+        [[idx, row['User'], str(row['InstanceID'])[:20], row['InstanceType'],
+          info['start'].strftime('%Y-%m-%d %H:%M'),
+          info['end'].strftime('%Y-%m-%d %H:%M'),
+          new_end.strftime('%Y-%m-%d %H:%M'),
+          info['elapsed_h'], info['walltime_h'], info['old_cost']]
+         for idx, row, info, new_end in changed],
+        headers=['idx', 'User', 'InstanceID', 'Type', 'Start (UTC)',
+                 'Old End (UTC)', 'New End (UTC)', 'Old_h', 'New_h', 'Cost'],
+        floatfmt='.4f'))
+
+    dropped = sum(i['elapsed_h'] - i['walltime_h'] for _, _, i, _ in changed)
+    print(f"\n{len(changed)} row(s), {dropped:.1f} phantom hour(s) removed. "
+          f"Cost unchanged on every row, so no balance moves.")
+
+    if not apply_changes:
+        print(f"\n[DRY RUN] {len(changed)} row(s) would be rewritten. "
+              f"Re-run with --apply to write.")
+        return
+
+    if not assume_yes:
+        confirm = input(f"\nRewrite End on {len(changed)} row(s) in "
+                        f"{account.usage_history}? (y/n) ")
+        if confirm.strip().lower() != 'y':
+            print("Aborted — no changes made.")
+            return
+
+    _backup_pkl(account)
+
+    fmt = '%Y-%m-%dT%H:%M:%S.%f%z'
+    for idx, _, _, new_end in changed:
+        df.loc[idx, 'End'] = new_end.strftime(fmt)
+
+    df.to_pickle(account.usage_history)
+    print(f"Done. PKL updated: {account.usage_history}")
+
+
+# --- cloud-truth reconstruction (GCP) ------------------------------------
+
+# Power-state transitions in the Compute Engine operations log. Everything else
+# (reset, setMetadata, upcomingMaintenance, migrateOnHostMaintenance, ...)
+# leaves the instance in whatever state it was already in.
+GCP_RUN_OPS = {'insert', 'start', 'resume'}
+GCP_HALT_OPS = {'stop', 'suspend', 'delete',
+                'compute.instances.guestTerminate',
+                'compute.instances.preempted'}
+
+# Skyway stamps its own clock when it records a session, which lands a few
+# seconds after the API operation. Allow a little slack on the leading edge so
+# a row is still seen as belonging to the span it opened.
+SPAN_LEAD_SLACK = pd.Timedelta(minutes=2)
+
+# Fallback when a row's Start falls in no span at all (e.g. the session was
+# recorded but the instance never actually came up).
+SPAN_NEAREST_WINDOW = pd.Timedelta(minutes=10)
+
+
+def _fetch_gcp_operations(account):
+    """
+    Return {instance_id: [(timestamp, operation_type), ...]} for the whole
+    project, sorted by time, using the account's own service-account key.
+
+    Note GCE only retains operations for a limited window, so this reconstructs
+    recent history only — older sessions simply come back with no events.
+    """
+    from google.oauth2 import service_account as gcp_sa
+    import google.auth.transport.requests as gart
+
+    creds = gcp_sa.Credentials.from_service_account_file(
+        account.keyfile, scopes=['https://www.googleapis.com/auth/cloud-platform'])
+    session = gart.AuthorizedSession(creds)
+    url = (f"https://compute.googleapis.com/compute/v1/projects/"
+           f"{account.project_id}/aggregated/operations")
+
+    ops = {}
+    token, pages, seen = None, 0, 0
+    while pages < 100:
+        params = {'maxResults': 500}
+        if token:
+            params['pageToken'] = token
+        resp = session.get(url, params=params)
+        resp.raise_for_status()
+        payload = resp.json()
+        pages += 1
+        for block in (payload.get('items') or {}).values():
+            for op in (block.get('operations') or []):
+                target = str(op.get('targetId', ''))
+                if not target or not op.get('insertTime'):
+                    continue
+                seen += 1
+                ops.setdefault(target, []).append(
+                    (pd.to_datetime(op['insertTime'], utc=True),
+                     op.get('operationType', '?')))
+        token = payload.get('nextPageToken')
+        if not token:
+            break
+    for events in ops.values():
+        events.sort()
+    print(f"Fetched {seen} operation(s) for {len(ops)} instance(s) "
+          f"over {pages} page(s) from the Compute Engine operations log.")
+    if pages >= 100:
+        print("WARNING: hit the page cap; older operations may be missing.")
+    return ops
+
+
+def _spans_from_events(events):
+    """
+    Collapse power events into disjoint (start, end, ending_op) running spans.
+
+    Repeated 'start' operations on an already-running instance (Skyway retries)
+    do not open a new span. A trailing span with end=None means the instance
+    was still up at the end of the log; callers must leave those sessions alone.
+    """
+    spans, opened = [], None
+    for ts, kind in events:
+        if kind in GCP_RUN_OPS:
+            if opened is None:
+                opened = ts
+        elif kind in GCP_HALT_OPS and opened is not None:
+            spans.append((opened, ts, kind))
+            opened = None
+    if opened is not None:
+        spans.append((opened, None, None))
+    return spans
+
+
+def _match_rows_to_spans(rows, spans):
+    """
+    Pair ledger rows with the real running span each one belongs to.
+
+    A row belongs to the span containing its Start (Skyway records the session
+    just after the instance comes up); if it falls in no span, fall back to the
+    nearest span start within SPAN_NEAREST_WINDOW. Two rows landing on the same
+    span means Skyway recorded a restart that never actually cycled the power,
+    so only the earliest keeps the span -- billing both would double-count.
+
+    rows:  [(idx, row, start_ts)] sorted by start_ts
+    Returns (pairs, unmatched, duplicates, leftover_spans).
+    """
+    pairs, unmatched, duplicates = [], [], []
+    claimed = {}
+    for idx, row, start in rows:
+        hit = None
+        for span in spans:
+            s_start, s_end, _ = span
+            if start < s_start - SPAN_LEAD_SLACK:
+                continue
+            if s_end is None or start <= s_end:
+                hit = span
+                break
+        if hit is None:
+            best, best_gap = None, None
+            for span in spans:
+                gap = abs(span[0] - start)
+                if gap <= SPAN_NEAREST_WINDOW and (best_gap is None or gap < best_gap):
+                    best, best_gap = span, gap
+            hit = best
+        if hit is None:
+            unmatched.append((idx, row, start))
+        elif hit[0] in claimed:
+            duplicates.append((idx, row, start, hit, claimed[hit[0]]))
+        else:
+            claimed[hit[0]] = idx
+            pairs.append((idx, row, start, hit))
+    leftover = [sp for sp in spans if sp[0] not in claimed]
+    return pairs, unmatched, duplicates, leftover
+
+
+def _from_cloud(account, vendor_name, user_name, all_users, instance_id,
+                add_missing, drop_duplicates, rebalance, apply_changes,
+                assume_yes):
+    if vendor_name != 'gcp':
+        sys.exit(f"--from-cloud is implemented for GCP only (this account is "
+                 f"'{vendor_name}'). The other vendors expose no equivalent "
+                 f"power-state operations log through Skyway's credentials.")
+
+    df = _load_pkl(account)
+    if df.empty:
+        print("Usage history is empty — nothing to reconcile.")
+        return
+
+    mask = pd.Series(True, index=df.index)
+    if not all_users:
+        mask &= df['User'] == user_name
+    if instance_id:
+        mask &= df['InstanceID'].astype(str) == str(instance_id)
+    targets = df.index[mask]
+    if len(targets) == 0:
+        print("No rows matched the given user/instance filter.")
+        return
+
+    scope = "all users" if all_users else f"user '{user_name}'"
+    if instance_id:
+        scope += f", instance '{instance_id}'"
+    print(f"Reconciling {len(targets)} row(s) in {account.usage_history} "
+          f"against the cloud ({scope})\n")
+
+    ops = _fetch_gcp_operations(account)
+    print("")
+
+    changed, already_ok, still_running = [], [], []
+    no_events, unmatched_rows, dup_rows, missing = [], [], [], []
+
+    by_instance = {}
+    for idx in targets:
+        by_instance.setdefault(str(df.loc[idx, 'InstanceID']), []).append(idx)
+
+    for iid, idxs in by_instance.items():
+        events = ops.get(iid)
+        if not events:
+            no_events.extend(idxs)
+            continue
+        spans = _spans_from_events(events)
+        rows = []
+        for idx in idxs:
+            start = pd.to_datetime(df.loc[idx, 'Start'], format='mixed',
+                                   utc=True, errors='coerce')
+            if pd.isna(start):
+                unmatched_rows.append((idx, df.loc[idx], None))
+            else:
+                rows.append((idx, df.loc[idx], start))
+        rows.sort(key=lambda r: r[2])
+
+        pairs, unm, dups, leftover = _match_rows_to_spans(rows, spans)
+        unmatched_rows.extend(unm)
+        dup_rows.extend(dups)
+
+        for idx, row, start, (s_start, s_end, end_op) in pairs:
+            if s_end is None:
+                still_running.append((idx, row, s_start))
+                continue
+            price = account.get_unit_price_by_name(row['InstanceType'])
+            if price is None or price <= 0:
+                unmatched_rows.append((idx, row, start))
+                continue
+            hours = (s_end - s_start).total_seconds() / 3600.0
+            new_cost = hours * price
+            try:
+                old_cost = float(row['Cost'])
+            except (TypeError, ValueError):
+                old_cost = float('nan')
+            entry = {'idx': idx, 'user': row['User'], 'iid': iid,
+                     'type': row['InstanceType'], 'span_start': s_start,
+                     'span_end': s_end, 'end_op': end_op, 'hours': hours,
+                     'price': price, 'old_cost': old_cost, 'new_cost': new_cost,
+                     'delta': new_cost - old_cost}
+            if pd.notna(old_cost) and abs(new_cost - old_cost) <= COST_TOLERANCE:
+                already_ok.append(entry)
+            else:
+                changed.append(entry)
+
+        # a real span nobody recorded: the user was never billed for it
+        owner = df.loc[idxs[0], 'User']
+        itype = df.loc[idxs[0], 'InstanceType']
+        for s_start, s_end, end_op in leftover:
+            if s_end is None:
+                continue
+            price = account.get_unit_price_by_name(itype)
+            if price is None or price <= 0:
+                continue
+            hours = (s_end - s_start).total_seconds() / 3600.0
+            missing.append({'user': owner, 'iid': iid, 'type': itype,
+                            'span_start': s_start, 'span_end': s_end,
+                            'end_op': end_op, 'hours': hours, 'price': price,
+                            'new_cost': hours * price})
+
+    def _table(entries):
+        return tabulate(
+            [[e['idx'], e['user'], e['type'],
+              e['span_start'].strftime('%m-%d %H:%M:%S'),
+              e['span_end'].strftime('%m-%d %H:%M:%S'),
+              (e['end_op'] or '').replace('compute.instances.', ''),
+              e['hours'], e['old_cost'], e['new_cost'], e['delta']]
+             for e in entries],
+            headers=['idx', 'User', 'Type', 'Cloud start', 'Cloud end', 'EndOp',
+                     'Actual_h', 'OldCost', 'NewCost', 'Delta'], floatfmt='.4f')
+
+    if changed:
+        print(f"Rows that disagree with the cloud ({len(changed)}) — will be rewritten:")
+        print(_table(changed))
+        print("")
+
+    if missing:
+        verb = "will be added (--add-missing)" if add_missing \
+            else "NOT added (pass --add-missing to record them)"
+        print(f"Unrecorded sessions ({len(missing)}) — the instance really ran but "
+              f"no ledger row covers it, so nobody was billed; {verb}:")
+        print(tabulate(
+            [[m['user'], str(m['iid'])[:20], m['type'],
+              m['span_start'].strftime('%m-%d %H:%M:%S'),
+              m['span_end'].strftime('%m-%d %H:%M:%S'),
+              (m['end_op'] or '').replace('compute.instances.', ''),
+              m['hours'], m['new_cost']] for m in missing],
+            headers=['User', 'InstanceID', 'Type', 'Cloud start', 'Cloud end',
+                     'EndOp', 'Actual_h', 'Cost'], floatfmt='.4f'))
+        print("")
+
+    if dup_rows:
+        verdict = "will be dropped (--drop-duplicates)" if drop_duplicates \
+            else "are left alone for you to decide"
+        print(f"Duplicate sessions ({len(dup_rows)}) — these rows share one real "
+              f"running span with an earlier row (Skyway recorded a restart that "
+              f"never cycled the power). Billing both would double-count, so they "
+              f"{verdict}:")
+        print(tabulate(
+            [[idx, row['User'], str(row['InstanceID'])[:20], row['InstanceType'],
+              start.strftime('%m-%d %H:%M:%S'), float(row['Cost']), keeper]
+             for idx, row, start, _, keeper in dup_rows],
+            headers=['idx', 'User', 'InstanceID', 'Type', 'Row start', 'Cost',
+                     'span held by idx'], floatfmt='.4f'))
+        print("")
+
+    if still_running:
+        print(f"Still running ({len(still_running)}) — left alone: "
+              f"{', '.join(str(i) for i, _, _ in still_running)}\n")
+    if unmatched_rows:
+        print(f"No matching cloud session ({len(unmatched_rows)}) — left alone: "
+              f"{', '.join(str(i) for i, _, _ in unmatched_rows)}\n")
+    if no_events:
+        print(f"No operations retained for the instance ({len(no_events)} row(s)) — "
+              f"left alone; GCE ages operations out, so older jobs cannot be "
+              f"reconstructed this way.\n")
+
+    print(f"Summary: {len(changed)} to rewrite, {len(already_ok)} already match, "
+          f"{len(missing)} unrecorded, {len(dup_rows)} duplicate, "
+          f"{len(still_running)} running, "
+          f"{len(unmatched_rows) + len(no_events)} without usable cloud data.")
+
+    writes = (list(changed) + (list(missing) if add_missing else [])
+              + (list(dup_rows) if drop_duplicates else []))
+    if not writes:
+        print("\nNothing to write.")
+        return
+
+    per_user = {}
+    for e in changed:
+        per_user[e['user']] = per_user.get(e['user'], 0.0) + e['delta']
+    if add_missing:
+        for m in missing:
+            per_user[m['user']] = per_user.get(m['user'], 0.0) + m['new_cost']
+    if drop_duplicates:
+        # dropping a double-counted row refunds exactly what it charged
+        for _, row, _, _, _ in dup_rows:
+            try:
+                cost = float(row['Cost'])
+            except (TypeError, ValueError):
+                cost = 0.0
+            per_user[row['User']] = per_user.get(row['User'], 0.0) - cost
+    print("\nNet Cost change per user (negative = user was over-charged):")
+    print(tabulate(sorted(per_user.items()), headers=['User', 'Delta ($)'],
+                   floatfmt='.4f'))
+
+    if not apply_changes:
+        print(f"\n[DRY RUN] {len(changed)} row(s) would be rewritten"
+              + (f", {len(missing)} added" if add_missing else "")
+              + (f", {len(dup_rows)} dropped" if drop_duplicates else "")
+              + ". Re-run with --apply to write.")
+        return
+
+    if not assume_yes:
+        confirm = input(f"\nWrite {len(writes)} change(s) to "
+                        f"{account.usage_history}? (y/n) ")
+        if confirm.strip().lower() != 'y':
+            print("Aborted — no changes made.")
+            return
+
+    _backup_pkl(account)
+
+    fmt = '%Y-%m-%dT%H:%M:%S.%f%z'
+    for e in changed:
+        df.loc[e['idx'], 'Start'] = e['span_start'].strftime(fmt)
+        df.loc[e['idx'], 'End'] = e['span_end'].strftime(fmt)
+        df.loc[e['idx'], 'Cost'] = e['new_cost']
+
+    # Drop before the add_missing concat below: that concat reindexes with
+    # ignore_index=True, which would invalidate the indices collected here.
+    if drop_duplicates and dup_rows:
+        df = df.drop(index=[idx for idx, _, _, _, _ in dup_rows])
+        # every other writer prepends with ignore_index=True, so keep the
+        # stored index contiguous rather than leaving holes behind
+        df = df.reset_index(drop=True)
+        print(f"Dropped {len(dup_rows)} double-counted row(s).")
+
+    if add_missing and missing:
+        cols = ['User', 'InstanceID', 'InstanceType', 'Start', 'End', 'Cost', 'Balance']
+        new_rows = [[m['user'], m['iid'], m['type'],
+                     m['span_start'].strftime(fmt), m['span_end'].strftime(fmt),
+                     m['new_cost'], 0.0] for m in missing]
+        df = pd.concat([pd.DataFrame(new_rows, columns=cols), df], ignore_index=True)
+        print(f"Added {len(new_rows)} previously unrecorded session(s).")
+
+    if rebalance:
+        print("Rebalancing the Balance column (budget - cumulative Cost, "
+              "chronological); this flattens any past budget adjustments:")
+        n = _rebalance_users(df, account, sorted(per_user))
+        print(f"  {n} row(s) rebalanced")
+    else:
+        print("NOTE: the per-row Balance column was left as-is (a write-time "
+              "snapshot). The balance skyway_usage reports is derived from Cost "
+              "and is now correct. Pass --rebalance to rewrite the column too.")
+        if add_missing and missing:
+            print("      Added rows carry Balance = 0.0 until you --rebalance.")
+
+    df.to_pickle(account.usage_history)
+    print(f"Done. PKL updated: {account.usage_history}")
+
+
+if __name__ == '__main__':
+    skywayroot = os.environ.get('SKYWAYROOT', '')
+    if not skywayroot:
+        sys.exit("SKYWAYROOT is not defined.")
+
+    parser = argparse.ArgumentParser(
+        description="Show per-job usage history; optionally amend a missing PKL entry"
+    )
+    parser.add_argument('-A', '--account', dest='account', required=True,
+                        help="Account name (e.g. rcc-gcp)")
+    parser.add_argument('-u', '--user', dest='username', required=True,
+                        help="User name")
+    parser.add_argument('--provider', dest='provider', default='',
+                        help="Vendor override: aws, gcp, oci, or azure")
+    parser.add_argument('--amend', dest='amend_id', default=None, metavar='INSTANCE_ID',
+                        help="Amend PKL for the given instance ID if a session is missing")
+    parser.add_argument('--dry-run', dest='dry_run', action='store_true', default=False,
+                        help="Show what would be written without modifying the PKL")
+    parser.add_argument('--repair-cost', dest='repair_cost', action='store_true', default=False,
+                        help="Recompute Cost from Start/End for rows still holding their "
+                             "launch-time projection (dry-run unless --apply)")
+    parser.add_argument('--apply', dest='apply_changes', action='store_true', default=False,
+                        help="With --repair-cost: actually write the repaired rows")
+    parser.add_argument('--yes', dest='assume_yes', action='store_true', default=False,
+                        help="With --repair-cost --apply: skip the confirmation prompt")
+    parser.add_argument('--all-users', dest='all_users', action='store_true', default=False,
+                        help="With --repair-cost: audit every user in the ledger, not just -u")
+    parser.add_argument('--instance', dest='instance_filter', default=None, metavar='INSTANCE_ID',
+                        help="With --repair-cost: restrict the audit to one instance ID")
+    parser.add_argument('--rebalance', dest='rebalance', action='store_true', default=False,
+                        help="With --repair-cost/--from-cloud --apply: also rewrite the "
+                             "per-row Balance column as budget - cumulative Cost")
+    parser.add_argument('--from-cloud', dest='from_cloud', action='store_true', default=False,
+                        help="GCP only: rebuild Start/End/Cost from the Compute Engine "
+                             "operations log instead of inferring from the PKL "
+                             "(dry-run unless --apply)")
+    parser.add_argument('--add-missing', dest='add_missing', action='store_true', default=False,
+                        help="With --from-cloud: also record real sessions that have no "
+                             "ledger row at all")
+    parser.add_argument('--drop-duplicates', dest='drop_duplicates',
+                        action='store_true', default=False,
+                        help="With --from-cloud: also delete rows that double-count "
+                             "a running span already billed by an earlier row")
+    parser.add_argument('--close-at-walltime', dest='close_at_walltime',
+                        action='store_true', default=False,
+                        help="Repair suspect rows by rewriting End to Start + walltime "
+                             "and leaving Cost as recorded (dry-run unless --apply)")
+    args = parser.parse_args()
+
+    modes = [m for m, on in (('--repair-cost', args.repair_cost),
+                             ('--from-cloud', args.from_cloud),
+                             ('--close-at-walltime', args.close_at_walltime),
+                             ('--amend', bool(args.amend_id))) if on]
+    if len(modes) > 1:
+        sys.exit(f"{' and '.join(modes)} cannot be combined; run them separately.")
+
+    for flag, on in (('--add-missing', args.add_missing),
+                     ('--drop-duplicates', args.drop_duplicates)):
+        if on and not args.from_cloud:
+            sys.exit(f"{flag} only applies with --from-cloud; the cloud operations "
+                     f"log is what identifies the rows it acts on.")
+
+    vendor_name = _infer_vendor(args.account, args.provider)
+    if vendor_name not in SUPPORTED_VENDORS:
+        sys.exit(f"Cannot infer vendor from account name '{args.account}'. "
+                 f"Use --provider to specify one of: {', '.join(SUPPORTED_VENDORS)}")
+
+    account = _make_account(args.account, vendor_name)
+    if account is None:
+        sys.exit(f"Failed to create account object for '{args.account}'.")
+
+    if args.from_cloud:
+        _from_cloud(account, vendor_name, args.username, args.all_users,
+                    args.instance_filter, args.add_missing,
+                    args.drop_duplicates, args.rebalance,
+                    apply_changes=args.apply_changes and not args.dry_run,
+                    assume_yes=args.assume_yes)
+    elif args.repair_cost:
+        _repair_cost(account, args.username, args.all_users, args.instance_filter,
+                     args.rebalance,
+                     apply_changes=args.apply_changes and not args.dry_run,
+                     assume_yes=args.assume_yes)
+    elif args.close_at_walltime:
+        _close_at_walltime(account, args.username, args.all_users,
+                           args.instance_filter,
+                           apply_changes=args.apply_changes and not args.dry_run,
+                           assume_yes=args.assume_yes)
+    elif args.amend_id:
+        _amend(account, vendor_name, args.amend_id, args.username, args.dry_run)
+    else:
+        _show_history(account, args.username)

@@ -2,7 +2,6 @@ name: build and deploy mkdocs to github pages
 on:
   push:
     branches:
-      - reorganized
       - main
 jobs:
   deploy:

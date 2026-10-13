@@ -1,3 +1,0 @@
-#!/bin/sh
-
-streamlit run /project/rcc/trung/skyway-github/skyway_gui.py

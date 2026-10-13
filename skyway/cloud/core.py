@@ -4,13 +4,66 @@
 # Maintainer: Yuxing Peng, Trung Nguyen
 
 import os
+from datetime import datetime, timezone
+import pandas as pd
+import yaml
 from tabulate import tabulate
 from .. import utils
+
+def parse_walltime(walltime_str):
+    """Parse HH:MM:SS or D-HH:MM:SS and return (total_hours, total_minutes_int)."""
+    days = 0
+    if '-' in walltime_str:
+        day_part, time_part = walltime_str.split('-', 1)
+        days = int(day_part)
+    else:
+        time_part = walltime_str
+    h, m, s = (int(x) for x in time_part.split(':'))
+    total_minutes = days * 1440 + h * 60 + m + s // 60
+    return total_minutes / 60, total_minutes
+
+
+def walltime_boot_script(walltime_in_minutes):
+    """
+    Boot script that arms the walltime shutdown from inside the instance.
+
+    The SSH `shutdown -P` sent after launch only happens if the client gets
+    that far; interrupting skyway_interactive/skyway_batch while it is waiting
+    on the cloud API leaves a running instance with no timer. Passing this as
+    GCE startup-script / EC2 user data lets the instance arm the timer itself.
+    The later SSH call reschedules the same shutdown, so the two do not conflict.
+    """
+    return f"#!/bin/bash\nshutdown -P +{walltime_in_minutes}\n"
+
+
+# Error codes/messages the providers return when a zone has run out of the
+# requested instance type. Quota errors are left out on purpose: they do not
+# clear up by waiting, so retrying on them would only spin until the timeout.
+CAPACITY_ERROR_MARKERS = (
+    'resource_pool_exhausted',          # GCE ZONE_RESOURCE_POOL_EXHAUSTED[_WITH_DETAILS]
+    'does not have enough resources',   # GCE message for the above
+    'stockout',                         # GCE
+    'no more capacity',                 # Cloud TPU
+    'insufficientinstancecapacity',     # AWS
+    'insufficient capacity',            # AWS
+    'out of host capacity',             # OCI
+)
+
+
+def is_capacity_error(exc):
+    """True if exc reports that the zone is out of stock for the instance type."""
+    text = f"{getattr(exc, 'code', '') or ''} {exc}".lower()
+    return any(marker in text for marker in CAPACITY_ERROR_MARKERS)
+
 
 # Provide the API for child classes to override
 
 class Cloud():
-    
+
+    # Set by create_nodes when no instance could be created and at least one
+    # zone of the scan was out of capacity, i.e. the request may succeed later.
+    capacity_exhausted = False
+
     def __init__(self, vendor_cfg, kwargs):
         self.vendor = vendor_cfg
         self.onpremises = False
@@ -20,6 +73,18 @@ class Cloud():
             
 
     # account info
+
+    def get_warning_threshold(self):
+        """Return the budget warning threshold as a fraction (0.0–1.0).
+
+        Reads 'warning_threshold' (a percentage integer, e.g. 90) from the
+        vendor section of cloud.yaml.  Falls back to 0.90 if the key is
+        absent or empty.
+        """
+        raw = self.vendor.get('warning_threshold', None)
+        if raw is None or raw == '':
+            return 0.90
+        return min(float(raw), 0.99)
 
     def check_valid_user(self, user_name, verbose=False):
         '''
@@ -72,6 +137,131 @@ class Cloud():
         '''
         pass
 
+    def get_unit_price_by_name(self, instance_type_name):
+        """
+        Look up the per-hour price from the vendor's node-types by the instance
+        type name as recorded in the usage history (e.g. 'a3-megagpu-8g',
+        'c5.4xlarge', 'v6e-8'). Unlike get_unit_price(), which takes a Skyway
+        node-type key such as 'a3mg8', this resolves what the PKL actually
+        stores. Returns -1.0 if the name is unknown.
+        """
+        if not instance_type_name:
+            return -1.0
+        name = str(instance_type_name)
+        for cfg in self.vendor.get('node-types', {}).values():
+            if cfg.get('name') == name or cfg.get('tpu-type') == name:
+                return cfg['price']
+        return -1.0
+
+    def _close_usage_row(self, df, idx, end_time, unit_price):
+        """
+        Close out an existing usage row: set End and recompute Cost from the
+        row's recorded Start, so the ledger holds actual runtime instead of the
+        projection written at launch. Balance is refreshed to stay consistent
+        with the corrected Cost. Cost is left untouched if Start cannot be
+        parsed or would imply negative runtime.
+        """
+        df.loc[idx, 'End'] = end_time.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+
+        instance_id = df.loc[idx, 'InstanceID']
+        # Stored timestamps vary (datetime objects on some backends, strings
+        # with or without a colon in the offset on others), so let pandas
+        # infer instead of pinning a format.
+        start_time = pd.to_datetime(df.loc[idx, 'Start'], utc=True, errors='coerce')
+        if pd.isna(start_time):
+            print(f"WARNING: cannot parse Start for {instance_id}; keeping projected cost.")
+            return
+
+        elapsed_hours = (end_time - start_time.to_pydatetime()).total_seconds() / 3600.0
+        if elapsed_hours < 0:
+            print(f"WARNING: Start of {instance_id} is after End; keeping projected cost.")
+            return
+
+        df.loc[idx, 'Cost'] = elapsed_hours * unit_price
+
+        row_user = df.loc[idx, 'User']
+        if row_user in self.users:
+            accumulated = df.loc[df['User'] == row_user].astype({'Cost': float})['Cost'].sum()
+            df.loc[idx, 'Balance'] = float(self.users[row_user]['budget']) - accumulated
+
+    def _find_session_row(self, df, instance_id, session_start,
+                          tolerance_minutes=5):
+        """
+        Return the index of the usage row recording the session that began at
+        session_start, or None if that session was never recorded.
+
+        Rows are prepended newest-first, so callers used to just take
+        index[0]. That is only right when every session got a row: create_nodes
+        and restart_nodes write one, but an instance started outside Skyway
+        does not, and then index[0] is an older, already-closed session whose
+        End and Cost are correct. Closing it again rewrites a good historical
+        record and bills the user for the whole gap in between.
+
+        Matching on Start rather than on "is End still in the future" keeps the
+        answer right for a session that outlived its projected walltime.
+        """
+        if session_start is None:
+            return None
+        rows = df[df['InstanceID'] == instance_id]
+        if rows.empty:
+            return None
+        # Stored timestamps are heterogeneous (offset with/without a colon,
+        # 3- or 6-digit fractional seconds), so let pandas infer per value.
+        starts = pd.to_datetime(rows['Start'], format='mixed', utc=True,
+                                errors='coerce')
+        cutoff = pd.Timestamp(session_start)
+        cutoff = cutoff.tz_localize('UTC') if cutoff.tz is None \
+            else cutoff.tz_convert('UTC')
+        cutoff -= pd.Timedelta(minutes=tolerance_minutes)
+        matches = rows.index[starts.notna() & (starts >= cutoff)]
+        return matches[0] if len(matches) else None
+
+    def _usage_row_is_closed(self, df, idx, now=None):
+        """
+        Whether a usage row already records a finished session.
+
+        An open row carries the projected shutdown time written at launch,
+        which is still in the future; a closed one carries the real End, which
+        is in the past. Backends that cannot identify which session a row
+        belongs to use this to avoid rewriting a row that is already correct.
+        An End that will not parse counts as closed, so the ambiguous case
+        errs toward leaving the ledger alone.
+        """
+        end = pd.to_datetime(df.loc[idx, 'End'], format='mixed', utc=True,
+                             errors='coerce')
+        if pd.isna(end):
+            return True
+        ref = pd.Timestamp(now if now is not None else datetime.now(timezone.utc))
+        ref = ref.tz_localize('UTC') if ref.tz is None else ref.tz_convert('UTC')
+        return end <= ref
+
+    def _abort_restart_session(self, df, unit_price, label, reason, stop_fn):
+        """
+        Roll back a restart whose walltime shutdown could not be armed.
+
+        create_nodes() destroys an instance when it cannot schedule
+        `shutdown -P`, on the reasoning that an instance with no timer runs
+        until somebody notices. A restarted instance is in the same position,
+        but it holds user data, so stop it instead of destroying it.
+
+        restart_nodes() writes the session row before the SSH step, so close
+        that row at the real end time; leaving it would bill a full-walltime
+        projection for a session that lasted minutes, and leave the row looking
+        like a legitimate open session.
+        """
+        print(f"Failed to schedule the walltime shutdown on {label}: {reason}")
+        print("Stopping the instance to avoid unbounded charges; data is preserved.")
+        try:
+            stop_fn()
+        except Exception as e:
+            print(f"WARNING: could not stop {label}: {e}\n"
+                  f"         Run 'skyway_stop' on it now — it has no shutdown timer.")
+            return
+        if df is not None and len(df) > 0:
+            self._close_usage_row(df, df.index[0],
+                                  datetime.now(timezone.utc), unit_price)
+            df.to_pickle(self.usage_history)
+
     # instance operations
 
     def list_nodes(self, show_protected_nodes=False, verbose=False):
@@ -92,11 +282,34 @@ class Cloud():
         '''
         pass
 
-    def destroy_nodes(self, node_names, need_confirmation=True):
+    def destroy_nodes(self, node_names, ids, need_confirmation=True):
         '''
         destroy several nodes (aka instances) given a list of node names
         '''
         pass
+
+    def stop_nodes(self, node_names, ids, need_confirmation=True):
+        '''
+        stop several nodes (aka instances) given a list of node names
+        '''
+        pass
+
+    def restart_nodes(self, node_names, need_confirmation=True):
+        '''
+        restart several nodes (aka instances) given a list of node names
+        '''
+        pass
+
+    def release_node(self, node_name):
+        '''
+        release a node as soon as the work on it is done, instead of waiting
+        for the walltime timer armed at launch to power it off
+
+        Stopping (rather than destroying) keeps the data on the node, lets
+        skyway_restart bring it back, and closes the usage row at the real end
+        time, so only the time actually used is billed.
+        '''
+        self.stop_nodes(node_names=[node_name], need_confirmation=False)
 
     def get_running_nodes(self, verbose=False):
         '''
@@ -157,6 +370,67 @@ class Cloud():
         '''
         pass
 
+    def update_budget(self, user_name, new_budget, note=""):
+        '''
+        update a user's budget in the account YAML and append a record to the
+        budget adjustment log (budget-log-<account>.pkl)
+        '''
+        account_path = os.environ['SKYWAYROOT'] + '/etc/accounts/'
+        cfg_file = f"{account_path}{self.account_name}.yaml"
+        budget_log = f"{account_path}budget-log-{self.account_name}.pkl"
+
+        if user_name not in self.users:
+            raise Exception(f"{user_name} is not listed in the user group of this account.")
+
+        old_budget = float(self.users[user_name]['budget'])
+
+        # update the YAML file
+        with open(cfg_file, 'r') as f:
+            cfg = yaml.load(f, Loader=yaml.FullLoader)
+        cfg['users'][user_name]['budget'] = new_budget
+        with open(cfg_file, 'w') as f:
+            yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
+
+        # update in-memory
+        self.users[user_name]['budget'] = new_budget
+
+        # append to adjustment log
+        adjusted_by = os.environ.get('USER', 'unknown')
+        timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        cols = ['Timestamp', 'Account', 'User', 'OldBudget', 'NewBudget', 'AdjustedBy', 'Note']
+        new_row = pd.DataFrame([[timestamp, self.account_name, user_name,
+                                  old_budget, float(new_budget), adjusted_by, note]],
+                               columns=cols)
+        if os.path.isfile(budget_log):
+            df = pd.read_pickle(budget_log)
+            df = pd.concat([df, new_row], ignore_index=True)
+        else:
+            df = new_row
+        df.to_pickle(budget_log)
+
+        return old_budget, float(new_budget)
+
+    def get_budget_history(self, user_name=None):
+        '''
+        return the budget adjustment log for the account, optionally filtered by user
+        '''
+        account_path = os.environ['SKYWAYROOT'] + '/etc/accounts/'
+        budget_log = f"{account_path}budget-log-{self.account_name}.pkl"
+        cols = ['Timestamp', 'Account', 'User', 'OldBudget', 'NewBudget', 'AdjustedBy', 'Note']
+
+        if not os.path.isfile(budget_log):
+            return pd.DataFrame(columns=cols)
+
+        df = pd.read_pickle(budget_log)
+        if user_name is not None:
+            df = df.loc[df['User'] == user_name]
+        return df.reset_index(drop=True)
+
+    def get_private_key(self):
+        '''
+        get the private key used for SSH public key authentication
+        '''
+        return ""
 
     @staticmethod
     def create(vendor: str, kwargs):

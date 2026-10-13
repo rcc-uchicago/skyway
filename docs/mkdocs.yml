@@ -1,6 +1,8 @@
 site_name: Skyway
 theme:
    name: 'material'
+   custom_dir: overrides
+   logo: assets/images/skyway.png
 
 docs_dir: ./source
 

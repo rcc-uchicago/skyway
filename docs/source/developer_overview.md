@@ -159,6 +159,19 @@ users:
   user2:  { budget: 5 }
 ```
 
+## Deploy Skyway as a module
+
+After installation, Skyway can be configured as a software module in a HPC cluster as other software packages.
+The module file just need to activate the environment, set the environment `SKYWAYROOT` to the location to the top-level installation folder,
+and prepend it to `$PATH`.
+
+```
+%Module1.0#####################################################################
+module load python/anaconda-2021.05
+source-sh sh /path/to/skyway-env/bin/activate
+setenv       SKYWAYROOT=/path/to/skyway/installation
+prepend-path PATH $SKYWAYROOT
+```
 
 ## Source code structure
 

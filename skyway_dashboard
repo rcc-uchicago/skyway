@@ -1,0 +1,3 @@
+#!/bin/sh
+
+streamlit run $SKYWAYROOT/skyway_gui.py

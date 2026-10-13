@@ -14,136 +14,205 @@ You need to log in to the HPC cluster.
 ssh -Y [cnetid]@midway3.rcc.uchicago.edu
 ```
 
-For Midway3 users, 
+For Midway3 users,
 
 ```
-  module use /project/rcc/shared/modulefiles
-  module load skyway
+module load skyway
 ```
 
-## Running Jobs
+## Using cloud resources
 
-You submit jobs to cloud in a similar manner to what do on your HPC cluster. The difference is that you should specify different partitions and accounts corresponding to the cloud services you have access to. Additionally, the instance configuration should be specified via `--constraint`.
+You submit jobs to cloud in a similar manner to what do on your HPC cluster. The difference is that you should specify different cloud accounts corresponding to the cloud services you have access to. The cloud account is different from the PI account on the RCC machines. Additionally, the instance configuration should be specified via `--constraint`.
 
-1) List all the node types available to an account
+### List all the node types available to an account
 ```
-skyway_nodetypes --account=your-aws-account
+skyway_nodetypes --account=your-cloud-account
 skyway_nodetypes --account=your-gcp-account
 ```
 
-To submit jobs to cloud, you must specify a type of virtual machine (VM) by the option `--constraint=[VM Type]`. The VM types currently supported through Skyway can be found in the table below. You can also get an up-to-date listing of the machine types by running command sinfo-node-types on a skyway login node.
+For instance, the AWS VM types currently available through Skyway can be found in the table below. Other VM types will be included per requests.
 
-|  <div style="width:100px">VM Type</div> | Configuration | Description |  AWS EC2 Instance |
-| ----------- | ----------- | ----------- |  ----------- |
-| t1  | 1 core, 1GB RAM | for testing and building software | t2.micro    |
-| c1  | 1 core, 4B RAM | for serial jobs                   | c5.large    |
-| c8  | 8 cores, 32GB RAM | for medium sized multicore jobs | c5.4xlarge  |
-| c36 | 36 cores, 144GB RAM | for large memory jobs         | c5.18xlarge |
-| g1  | 4 cores, 61 GB RAM, 1x V100 GPU | for GPU jobs                         | p3.2xlarge  |
-| g4  | 16 cores, 244 GB RAM, 4x V100 GPU | for heavy GPU jobs                   | p3.8xlarge  |
-| g5  | 8 cores, 32 GB RAM, 1x A10G GPU | for heavy GPU jobs                   | p5.2xlarge  |
-| m24 | 24 cores, 384GB RAM | for large memory jobs         | c5.12xlarge |
+|  <div style="width:100px">VM Type</div> | AWS EC2 Instance | Configuration | Description |  
+| ----------- | ----------- | ----------- | ----------- |  
+| t1  | t2.micro    | 1 core, 1GB RAM | for testing and building software |
+| c1  | c5.large    | 1 core, 4B RAM | for serial jobs                   |
+| c8  | c5.4xlarge  | 8 cores, 32GB RAM | for medium sized multicore jobs | 
+| c36 | c5.18xlarge | 36 cores, 144GB RAM | for large memory jobs         |
+| g1  | p3.2xlarge  | 4 cores, 61 GB RAM, 1x V100 GPU | for GPU jobs                         |
+| g4  | p3.8xlarge  | 16 cores, 244 GB RAM, 4x V100 GPU | for heavy GPU jobs                   |
+| g5  | p5.2xlarge  | 8 cores, 32 GB RAM, 1x A10G GPU | for heavy GPU jobs                   |
+| m24 | c5.12xlarge | 24 cores, 384GB RAM | for large memory jobs         |
 
-2) Allocate/provision an instance
+The following steps show a representative workflow with Skyway on the Midway3 login node.
+
+### Allocate/provision an instance
+
+To submit jobs to cloud, you must specify a type of virtual machine (VM) by the option `--constraint=[VM Type]`.
   ```
-  skyway_alloc --account=rcc-aws --constraint=t1 --time=01:00:00
+  skyway_alloc --account=your-cloud-account --constraint=t1 --time=01:00:00
   ```
   For a GPU instance, use
   ```
-  skyway_alloc -A rcc-aws --constraint=g5 --time=00:30:00
+  skyway_alloc -A your-cloud-account --constraint=g5 --time=00:30:00
   ```
 
-3) List all the running VMs with an account
+Expected behavior: If a VM is successfully provisioned, Skyway will show its public IP and a port number to which a SSH tunnel is set up on the login node.
+
+### List the running and stopped VMs
   ```
-  skyway_list --account=rcc-aws
+  skyway_list --account=your-cloud-account
   ```
 
-4) Transfer data to the instance named your-run
+Expected behavior: The output shows all the running and stopped VMs under the cloud account.
+
+### Transfer data
+
+To copy a file from the login node to the instance named `your-run`
   ```
-  skyway_transfer --account=rcc-aws -J your-run training.py
+  skyway_transfer -A your-cloud-account -J your-run /path/to/my/code/training.py
   ```
 
-5) Connect to the VM named your-run
+Transfer a file from an instance to the login node
   ```
-  skyway_connect --account=rcc-aws your-run
+  skyway_transfer -A your-cloud-account -J your-run --from-cloud --cloud-path=~/output.txt $HOME/output.txt
   ```
 
-Once on the VM, do
+You can also use scp or rsync to transfer data from and to the VM
   ```
-  nvidia-smi
-  source activate pytorch
-  python training.py > ~/output.txt
-  scp output.txt [yourcnetid]@midway3.rcc.uchicago.edu:~/
-  exit
+  scp -i ~/.my_aws_ssh_key.pem -rC [user-name]@[vm-public-ip]:/path/to/data $HOME/path/to/dest/
   ```
-At this point, there would be a file named output.txt in your Midway3 home folder.
+Expected behavior: The data is present at the destination.
 
-6) Cancel/terminate/cancel a job
+### Connect to the VM
+
+To connect to the VM or cloud job with named `your-run`, use the `skyway_connect` command
   ```
-  skyway_cancel --account=rcc-aws [job_name]
+  skyway_connect --account=your-cloud-account your-run
+  ```
+
+Expected behavior: The prompt shows the current working directory is on the VM.
+
+You can use the VS Code Remote SSH Extension to connect to the VM using the private key above.
+
+Alternatively, you can install Jupyter in a persistent storage accessible from the VM, and
+launch a Jupyter session with the port number returned by `skyway_alloc` or `skyway_interactive` earlier
+  ```
+  # Go to the persistent storage folder on the VM (arranged previously by Skyway admins)
+  cd /tmp/gcs
+  python -m venv my-env
+  source my-env/bin/activate
+  python -m pip install --upgrade pip
+  pip install notebook
+  jupyter notebook --no-browser --ip=127.0.0.1 --port 21471
+  ```
+If the server is up and running, you will see a URL:
+```
+http://127.0.0.1:28875/tree?token=b1ee21e419bd59dede01ab4bda37499597ea7e0b99a968f
+```
+
+At this point, if you are in a ThinLinc session to the login node you can run the web browser (Firefox) and open this URL.
+
+If you are using a SSH connection to the login node from your Linux/MacOS/Windows machine, 
+then you will need to set up a port forwarding from the login node to the VM using the private key:
+  ```
+  ssh -i ~/.my_gcp_ssh_key.pem –L 21471:localhost:21471 [your-user-name]@[vm_public_ip]
+  ```
+and another port forward to your machine using 2FA:
+  ```
+  ssh -N -f -L 21471:localhost:21471 [your-CNetID]@midway3.rcc.uchicago.edu
+  ```
+Now you can can run the web browser on your machine to open the URL with the token above.
+
+Expected behavior: You can see the Jupyter Notebook session with the folder and files on the VM .
+
+### Stop/restart a job
+
+To stop an instance, you use the `skyway_stop` command with your account and the instance ID:
+  ```
+  skyway_stop -A=your-cloud-account -i [instanceID]
+  ```
+The stopped instance does not get charged and the data on the VM is preserved. The data on the persistent storage remains, but not on the home folder.
+
+Expected behavior: The command returns without any error message. `skyway_list` shows the VM in the `stopped` status.
+
+To restart a stopped instance, you use the `skyway_restart` command with your account and the instance ID:
+  ```
+  skyway_restart -A=your-cloud-account -i [instanceID] -t 02:00:00
+  ```
+The instance ID is reported by the `skyway_list` command. You will be asked to confirm the allocation for the VM with the same VM type.
+
+Expected behavior: The command returns without any error message. `skyway_list` shows the VM in the `running` status.
+
+### Cancel/terminate/cancel a job
+  ```
+  skyway_cancel --account=your-cloud-account [job_name]
   ```
 
 Expected behavior: The jobs (VMs) got terminated. When run `skyway_list` (step 3 above) the VM will not be present.
 
+Note that when a VM is terminated, all the data on the VM is erased. The user should transfer the intermediate output to a cloud storage space or to local storage.
+
+## Interactive and batch jobs
+
+Skyway support interactive and batch jobs submitted from the Midway3 login nodes in a similar fashion to Slurm jobs.
 The following steps are for launching interactive and batch jobs.
 
-7) Submit an interactive job (combinig steps 4, 6 and 7)
+### Submit an interactive job
 
-  7a) to AWS
   ```
-  skyway_interative --account=rcc-aws --constraint=t1 --time=01:00:00
+  skyway_interative --account=your-cloud-account --constraint=t1 --time=01:00:00
   ```
   For a GPU instance, use
   ```
-  skyway_interative --account=rcc-aws --constraint=g5 -t 00:30:00
+  skyway_interative --account=your-cloud-account --constraint=g5 -t 00:30:00
   ```
 
-  7b) to midway3
-  ```
-  skyway_interactive --account=rcc-midway3 --constraint=t1 --time=01:00:00
-  ```
 Expected behavior: the user lands on a compute node or a VM on a separate terminal.
 
-8) Submit a batch job
+### Submit a batch job
 
-A sample job script `job_script.sh` would look like this
+A sample job script `job_script.sh` is given as bellow
 
   ```
   #!/bin/sh
 
   #SBATCH --job-name=your-run
-  #SBATCH --account=rcc-aws
+  #SBATCH --account=your-cloud-account
   #SBATCH --constraint=g1
+  #SBATCH --time=06:00:00
 
+  skyway_transfer training.py
+  
   source activate pytorch
+  wget [url-of-the-dataset]
   python training.py
   ```
 
 
-  8a) Submit the job
+To submit the job, use the `skyway_batch` command
   ```
   skyway_batch job_script.sh
   ```
-  8b) Connect to the VM to check the current progress of the run (like step 7)
+
+When the job script finishes, the instance is stopped right away, so the unused part of the walltime is not charged. Likewise, if the job is terminated due to the time limit, the instance is stopped. In both cases the data on the instance is preserved: you can find the instance ID with the `skyway_list` command and restart it to back up the data.
+
+To keep the instance running after the job script finishes (until the walltime is reached, and charged until then), submit with
   ```
-  skyway_connect -A rcc-aws -J your-run
-  ```
-  
-  Once on the VM:
-  ```
-  ls -lrt
-  cat output.txt
-  exit
-  ``` 
-  
-  8c) Transfer output data from cloud
-  ```
-  skyway_transfer --account=rcc-aws -J your-run --from-cloud --cloud-path=~/model*.pkl .
+  skyway_batch --no-auto-stop job_script.sh
   ```
 
-  8d) Cancel the job (like step 6)
+If the requested instance type is out of capacity in every zone (common for GPU instances), you can let `skyway_batch` keep retrying until one becomes available:
+  ```
+  skyway_batch --retry --retry-interval=10 --max-attempts=10 job_script.sh
+  ```
+Each attempt scans all the zones again; `--retry-interval` is the wait between attempts in minutes (default 10) and `--max-attempts` the total number of attempts, including the first one (default 10). Only capacity errors are retried: a request that fails for another reason (insufficient budget, quota, credentials) stops right away. The command waits in the foreground while retrying, so run it inside `tmux` or `screen` if you need to disconnect.
 
+Transfer output data from cloud
+  ```
+  skyway_transfer -A your-cloud-account -J your-run --from-cloud --cloud-path=~/model*.pkl .
+  ```
 
+You can cancel the job using the `skyway_cancel` command.
 
 ## Troubleshooting
 

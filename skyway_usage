@@ -1,0 +1,388 @@
+#!/usr/bin/env python
+import argparse
+from datetime import datetime, timezone
+from io import StringIO
+import os
+import re
+import shutil
+from subprocess import PIPE, Popen
+
+import pandas as pd
+from tabulate import tabulate
+
+import skyway
+from skyway.cloud.aws import *
+from skyway.cloud.gcp import *
+from skyway.cloud.azure import *
+from skyway.cloud.slurm import *
+from skyway.cloud.oci import *
+
+import colorama
+from colorama import Fore
+
+# export SKYWAYROOT=/project/rcc/trung/skyway-github
+#./skyway_list --account=rcc-aws
+
+# --- reconcile helpers -------------------------------------------------------
+
+_MINUTE_EPSILON = 0.01   # tolerance for whole-minute cost projection detection
+
+
+def _is_projection(cost, unit_price):
+    """Return True if cost looks like a whole-minute walltime projection."""
+    if unit_price <= 0 or cost <= 0:
+        return False
+    implied_minutes = cost / unit_price * 60.0
+    rounded = round(implied_minutes)
+    return rounded >= 1 and abs(implied_minutes - rounded) <= _MINUTE_EPSILON
+
+
+def _not_latest_run(df, indices):
+    """
+    Return the subset of indices whose row is not the unique most recent run of
+    its instance across the whole usage history.
+
+    The cloud APIs only report an instance's latest stop time, so it can only
+    close that instance's latest row. Pricing an earlier row of a restarted
+    instance up to that stop time would charge the overlapping hours twice.
+    Rows are also excluded when the order is unknown: a tie on the latest start,
+    or another row of the same instance with an unparseable start.
+    """
+    starts = pd.to_datetime(df['Start'], format='mixed', utc=True, errors='coerce')
+    iids = df['InstanceID'].astype(str)
+    excluded = set()
+    for idx in indices:
+        same = starts[iids == iids[idx]]
+        if same.isna().any():
+            excluded.add(idx)
+            continue
+        latest = same.max()
+        if starts[idx] != latest or (same == latest).sum() > 1:
+            excluded.add(idx)
+    return excluded
+
+
+def _aws_stop_time(account, instance_id):
+    """
+    Return the actual stop time for a stopped AWS instance, or None.
+
+    Checks the SkywayStopTime instance tag first (written by skyway_batch
+    background jobs just before shutdown). Falls back to the timestamp embedded
+    in StateTransitionReason for instances stopped via the AWS API; that field
+    has no timestamp for OS-initiated shutdowns, so returns None in that case.
+    """
+    try:
+        instances = list(account.ec2.instances.filter(InstanceIds=[instance_id]))
+        if not instances:
+            return None
+        inst = instances[0]
+        if inst.state['Name'] not in ('stopped', 'terminated'):
+            return None
+        for tag in (inst.tags or []):
+            if tag['Key'] == 'SkywayStopTime':
+                try:
+                    return datetime.strptime(tag['Value'], '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+                except ValueError:
+                    pass
+        reason = inst.state_transition_reason or ''
+        m = re.search(r'\((\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) GMT\)', reason)
+        if m:
+            return datetime.strptime(m.group(1), '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+    except Exception as e:
+        print(f"  WARNING: could not look up stop time for {instance_id}: {e}")
+    return None
+
+
+def _gcp_stop_time(account, instance_id):
+    """
+    Return the actual stop time for a stopped GCP instance via lastStopTimestamp,
+    or None if the instance is still running or the field is absent.
+    """
+    try:
+        for node in account.driver.list_nodes():
+            if str(node.id) != str(instance_id):
+                continue
+            if node.state not in ('terminated', 'stopped'):
+                return None
+            self_link = node.extra.get('selfLink', '')
+            if not self_link:
+                return None
+            path = self_link.split('/projects/' + str(node.driver.project), 1)[-1]
+            obj = node.driver.connection.request(path).object or {}
+            stop_ts = obj.get('lastStopTimestamp')
+            if stop_ts:
+                for fmt in ('%Y-%m-%dT%H:%M:%S.%f%z', '%Y-%m-%dT%H:%M:%S%z'):
+                    try:
+                        return datetime.strptime(stop_ts, fmt)
+                    except ValueError:
+                        continue
+    except Exception as e:
+        print(f"  WARNING: could not look up stop time for {instance_id}: {e}")
+    return None
+
+
+def _reconcile(account, vendor_name, user_name, apply_changes):
+    """
+    Find stale usage rows for user_name (cost is a launch-time walltime
+    projection that was never updated), confirm each instance is stopped in the
+    cloud, fetch the actual stop time, and rewrite End + Cost.
+
+    Dry-run unless apply_changes=True; always creates a timestamped backup.
+    Only AWS and GCP can supply actual stop times; other vendors are skipped.
+    """
+    if not os.path.isfile(account.usage_history):
+        print("No usage history found.")
+        return
+
+    df = pd.read_pickle(account.usage_history)
+    if df.empty:
+        print("Usage history is empty.")
+        return
+
+    user_rows = df.index[df['User'] == user_name]
+    if len(user_rows) == 0:
+        print(f"No history found for '{user_name}'.")
+        return
+
+    stale_indices = []
+    for idx in user_rows:
+        row = df.loc[idx]
+        price = account.get_unit_price_by_name(row['InstanceType'])
+        if price is None or price <= 0:
+            continue
+        try:
+            cost = float(row['Cost'])
+        except (TypeError, ValueError):
+            continue
+        if _is_projection(cost, price):
+            stale_indices.append(idx)
+
+    if not stale_indices:
+        print(f"No stale rows for '{user_name}' — nothing to reconcile.")
+        return
+
+    print(f"Found {len(stale_indices)} stale row(s) for '{user_name}'; "
+          f"querying cloud for actual stop times...")
+
+    repaired, skipped, not_latest = [], [], []
+    excluded = _not_latest_run(df, stale_indices)
+
+    for idx in stale_indices:
+        row = df.loc[idx]
+        iid = str(row['InstanceID'])
+        price = account.get_unit_price_by_name(row['InstanceType'])
+
+        if idx in excluded:
+            not_latest.append(idx)
+            continue
+
+        if vendor_name == 'aws':
+            stop_time = _aws_stop_time(account, iid)
+        elif vendor_name == 'gcp':
+            stop_time = _gcp_stop_time(account, iid)
+        else:
+            skipped.append(iid)
+            continue
+
+        if stop_time is None:
+            skipped.append(iid)
+            continue
+
+        start = pd.to_datetime(row['Start'], format='mixed', utc=True, errors='coerce')
+        if pd.isna(start) or stop_time <= start:
+            skipped.append(iid)
+            continue
+
+        elapsed_h = (stop_time - start).total_seconds() / 3600.0
+        old_cost = float(row['Cost'])
+        new_cost = elapsed_h * price
+        repaired.append({
+            'idx': idx,
+            'iid': iid,
+            'itype': row['InstanceType'],
+            'start': start,
+            'stop_time': stop_time,
+            'elapsed_h': elapsed_h,
+            'price': price,
+            'old_cost': old_cost,
+            'new_cost': new_cost,
+            'delta': new_cost - old_cost,
+        })
+
+    if not_latest:
+        print(f"  {len(not_latest)} row(s) skipped: not the most recent run of a "
+              f"restarted instance, so the cloud's last stop time does not apply:")
+        for idx in not_latest:
+            row = df.loc[idx]
+            print(f"    {row['InstanceID']}  Start {row['Start']}  Cost ${float(row['Cost']):.4f}")
+        print("  Close these with skyway_history --close-at-walltime if needed.")
+    if skipped:
+        print(f"  {len(skipped)} instance(s) skipped: still running, stop time "
+              f"unavailable, or vendor not supported (OCI/Azure).")
+        if vendor_name == 'aws':
+            print("  TIP: AWS instances stopped from inside the guest (e.g. via "
+                  "sudo shutdown) do not carry a stop timestamp in the API unless "
+                  "skyway_batch background mode recorded it as a SkywayStopTime tag. "
+                  "Use skyway_history --close-at-walltime as a fallback.")
+
+    if not repaired:
+        print("Nothing to reconcile.")
+        return
+
+    print(tabulate(
+        [[e['iid'][:20], e['itype'],
+          e['start'].strftime('%Y-%m-%d %H:%M'),
+          e['stop_time'].strftime('%Y-%m-%d %H:%M'),
+          f"{e['elapsed_h']:.3f}", f"${e['price']}",
+          f"${e['old_cost']:.4f}", f"${e['new_cost']:.4f}", f"${e['delta']:+.4f}"]
+         for e in repaired],
+        headers=['InstanceID', 'Type', 'Start (UTC)', 'Stop (UTC)',
+                 'Actual_h', '$/h', 'OldCost', 'NewCost', 'Delta']))
+
+    total_delta = sum(e['delta'] for e in repaired)
+    print(f"\n{len(repaired)} row(s). Net cost change for '{user_name}': "
+          f"${total_delta:+.4f}")
+
+    if not apply_changes:
+        print("\n[DRY RUN] No changes made. Re-run with --apply to write.")
+        return
+
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+    backup = f"{account.usage_history}.bak-{stamp}"
+    shutil.copy2(account.usage_history, backup)
+    print(f"Backup written: {backup}")
+
+    fmt = '%Y-%m-%dT%H:%M:%S.%f%z'
+    for e in repaired:
+        df.loc[e['idx'], 'End'] = e['stop_time'].strftime(fmt)
+        df.loc[e['idx'], 'Cost'] = e['new_cost']
+
+    df.to_pickle(account.usage_history)
+    print(f"Done. PKL updated: {account.usage_history}")
+
+
+# -----------------------------------------------------------------------------
+
+class InstanceDescriptor:
+    def __init__(self, jobname: str, account_name: str, node_type: str, walltime: str, vendor_name: str):
+        self.jobname = jobname
+        self.account_name = account_name
+        self.node_type = node_type
+        self.walltime = walltime
+        self.vendor_name = vendor_name
+
+        self.account = None
+        if 'aws' in vendor_name:
+            self.account = AWS(account_name)
+        elif 'gcp' in vendor_name:
+            self.account = GCP(account_name)
+        elif 'azure' in vendor_name:
+            self.account = AZURE(account_name)
+        elif 'oci' in vendor_name:
+            self.account = OCI(account_name)
+        elif 'midway3' in vendor_name:
+            self.account = SLURMCluster(account_name)
+
+        self.user = os.environ['USER']
+
+    def getUsage(self, user_name):
+        # retrieve from database for the given account
+        user_budget = self.account.get_budget(user_name=user_name, verbose=False)
+        accumulating_cost, _ = self.account.get_cost_and_usage_from_db(user_name=user_name)
+        running_cost = self.account.get_running_cost(verbose=False, user_name=user_name)
+        remaining_balance = float(user_budget) - float(accumulating_cost) - float(running_cost)
+        return user_budget, accumulating_cost, running_cost, remaining_balance
+
+    def getUsageHistory(self, user_name):
+        df = self.account.get_usage_history_from_db(user_name=user_name)
+        return df
+
+if __name__ == "__main__":
+
+    colorama.init(autoreset=True)
+
+    msg = "Skyway usage of a cloud account by users and by jobs"
+
+    parser = argparse.ArgumentParser(description=msg)
+    parser.add_argument('-u', '--user',  dest='username', default=None, help="User name (default: all users in the account)")
+    parser.add_argument('-A', '--account', dest='account', default="", help="Account name")
+    parser.add_argument('--byjob', dest='byjob', action='store_true', default=False, help="Show jobs if specified")
+    parser.add_argument('--provider', dest='provider', default="", help="Vendor name: AWS, GCP, Azure, or RCC Midway")
+    parser.add_argument('--reconcile', dest='reconcile', action='store_true', default=False,
+                        help="Cross-check stale usage rows against the cloud and close any "
+                             "that belong to stopped instances (dry-run by default; use --apply to write)")
+    parser.add_argument('--apply', dest='apply_changes', action='store_true', default=False,
+                        help="With --reconcile: write the repaired rows to the PKL "
+                             "(creates a timestamped backup first)")
+
+    args = parser.parse_args()
+
+    user_name = args.username
+    account_name = args.account
+    provider = args.provider.lower()
+    byjob = args.byjob
+    reconcile = args.reconcile
+    apply_changes = args.apply_changes
+
+    if provider == "":
+        # try to infer the vendor name from account
+        if 'aws' in account_name:
+            vendor_name = "aws"
+        elif 'gcp' in account_name:
+            vendor_name = "gcp"
+        elif 'azure' in account_name:
+            vendor_name = "azure"
+        elif 'oci' in account_name:
+            vendor_name = "oci"
+        elif 'midway3' in account_name or 'rcc-staff' in account_name:
+            vendor_name = "rcc-midway3"
+    else:
+        vendor_name = provider
+
+    # get the env variable SKYWAYROOT
+    skywayroot = os.environ['SKYWAYROOT']
+    if skywayroot == "":
+        raise Exception("SKYWAYROOT is not defined.")
+
+    # create an instance descriptor (like with the dashboard)
+    instanceDescriptor = InstanceDescriptor("", account_name, "", "", vendor_name)
+
+    # determine which users to display
+    if user_name is not None:
+        users_to_show = [user_name]
+    else:
+        users_to_show = list(instanceDescriptor.account.users.keys())
+
+    # reconcile stale usage rows against the cloud before displaying
+    if reconcile:
+        reconcile_user = user_name if user_name is not None else os.environ['USER']
+        _reconcile(instanceDescriptor.account, vendor_name, reconcile_user, apply_changes)
+        print("")
+
+    # usage
+    headers = ["User", 'Allocation', 'Usage', 'Running', 'Balance']
+    data = []
+    for uname in users_to_show:
+        user_budget, usage, running_cost, balance = instanceDescriptor.getUsage(uname)
+        data.append([uname, user_budget, f"${usage:.4f}", f"${running_cost:.4f}", f"${balance:.4f}"])
+    print(tabulate(data, headers=headers))
+
+    if byjob == True:
+        for uname in users_to_show:
+            df = instanceDescriptor.getUsageHistory(uname)
+
+            if df.empty == True:
+                headers = ['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance']
+                print(tabulate([], headers=headers))
+                print("")
+            else:
+                headers = ['User','InstanceID','InstanceType','Start','End', 'Cost', 'Balance']
+                print(df)
+
+    print("NOTE:")
+    print("  + Running: live cost of currently active instances.")
+    print("  + Usage and balance will be updated in the database after instances are terminated or stopped.")
+    if byjob == True:
+        print("  + An upward jump in Balance between two jobs indicates a budget adjustment.")
+        print("    The jump size equals the amount added (new_budget - old_budget).")
+    

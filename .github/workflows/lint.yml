@@ -1,0 +1,31 @@
+name: Lint and Import Check
+
+on: [push, pull_request]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install apache-libcloud boto3 google-cloud-tpu pandas tabulate colorama tqdm pyyaml flake8
+
+      - name: Install package
+        run: pip install -e . --no-deps
+
+      - name: Check GCP and AWS imports
+        env:
+          SKYWAYROOT: ${{ github.workspace }}
+        run: |
+          python -c "import skyway"
+          python -c "from skyway.cloud.gcp import GCP"
+          python -c "from skyway.cloud.aws import AWS"
+
+      - name: Lint for syntax and undefined-name errors
+        run: flake8 skyway/ --select=E9,F63,F7,F82 --statistics

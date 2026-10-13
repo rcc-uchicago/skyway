@@ -1,0 +1,63 @@
+This is a tutorial to run Skyway 2.0 on Midway3
+
+  module use /project/rcc/shared/modulefiles
+  module load skyway
+
+The following step-by-step workflow is used to test the basic functionalities:
+
+1) List all the node types available to an account
+
+   skyway_nodetypes --account=rcc-aws
+
+2) Submit an interactive job to AWS
+
+   skyway_interative --account=rcc-aws --constraint=t1 --time=01:00:00
+
+For a GPU instance, use
+
+   skyway_interative --account=rcc-aws --constraint=g5 --time=00:30:00
+
+3) List all the running VMs with an account
+
+   skyway_list --account=rcc-aws
+
+4) Transfer data to the instance named your-run
+
+   skyway_transfer --account=rcc-aws -J your-run training.py
+
+5) Connect to the VM named your-run
+
+   skyway_connect --account=rcc-aws your-run
+
+Once on the VM, do
+    source activate pytorch
+    python training.py > ~/output.txt
+    scp output.txt [yourcnetid]@midway3.rcc.uchicago.edu
+    exit
+
+6) Cancel/terminate a job named "your-run"
+  
+   skyway_cancel --account=rcc-aws your-run
+
+
+7) Submit a batch job to do similar tasks after step 4
+
+   skyway_batch job_script.sh
+
+
+8) Connect to the VM to check the current progress of the run (like step 5)
+
+   skyway_connect --account=rcc-aws your-run
+
+Once on the VM:
+
+   ls -lrt
+   cat output.txt
+   exit
+
+9) Transfer output data from cloud
+
+  skyway_transfer --account=rcc-aws -J your-run --from-cloud --cloud-path=~/model*.pkl .
+
+10) Cancel the job (like step 6)
+

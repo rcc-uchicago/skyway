@@ -1,0 +1,164 @@
+#!/usr/bin/env python
+import argparse
+from datetime import datetime, timezone
+from io import StringIO
+import os
+import subprocess
+from subprocess import PIPE, Popen
+import sys
+
+import skyway
+from skyway.cloud.aws import *
+from skyway.cloud.gcp import *
+from skyway.cloud.azure import *
+from skyway.cloud.slurm import *
+from skyway.cloud.oci import *
+
+import colorama
+from colorama import Fore
+
+# export SKYWAYROOT=/project/rcc/trung/skyway-github
+#./skyway_list --account=rcc-aws
+
+class InstanceDescriptor:
+    def __init__(self, account_name: str, node_type: str, walltime: str, vendor_name: str):
+
+        self.account_name = account_name
+        self.node_type = node_type
+        self.walltime = walltime
+        self.vendor_name = vendor_name
+
+        self.account = None
+        if 'aws' in vendor_name:
+            self.account = AWS(account_name)
+        elif 'gcp' in vendor_name:
+            self.account = GCP(account_name)
+        elif 'azure' in vendor_name:
+            self.account = AZURE(account_name)
+        elif 'oci' in vendor_name:
+            self.account = OCI(account_name)
+        elif 'midway3' in vendor_name:
+            self.account = SLURMCluster(account_name)
+
+        self.user = os.environ['USER']
+
+    def getBalance(self):
+        # retrieve from database for the given account
+        accumulating_cost, remaining_balance = self.account.get_cost_and_usage_from_db(user_name=self.user)
+        return remaining_balance
+  
+    def list_users(self):
+        for user in self.account.users.keys():
+            print(f"+ {user}")
+
+
+if __name__ == "__main__":
+
+    colorama.init(autoreset=True)
+
+    msg = "Skyway info"
+    
+    parser = argparse.ArgumentParser(description=msg)
+    parser.add_argument('-A', '--account', dest='account', default="", help="Account name")
+
+    args = parser.parse_args()
+    account_name = args.account
+    provider = ""
+
+    # get the env variable SKYWAYROOT
+    skywayroot = os.environ['SKYWAYROOT']
+    if skywayroot == "":
+        raise Exception("SKYWAYROOT is not defined.")
+
+    if len(account_name) != 0:
+        vendor_name = ""
+        if provider == "":
+            # try to infer the vendor name from account
+            if 'aws' in account_name:
+                vendor_name = "aws"
+            elif 'gcp' in account_name:
+                vendor_name = "gcp"
+            elif 'azure' in account_name:
+                vendor_name = "azure"
+            elif 'oci' in account_name:
+                vendor_name = "oci"
+            elif 'midway3' in account_name or 'rcc-staff' in account_name:
+                vendor_name = "rcc-midway3"
+        else:
+            vendor_name = provider
+
+        # create an instance descriptor (like with the dashboard)
+        instanceDescriptor = InstanceDescriptor(account_name, "", "", vendor_name)
+        print(f"Current users under the account: {account_name}")
+        instanceDescriptor.list_users()
+        sys.exit()
+
+    print(Fore.GREEN + f"Skyway v2.1")
+    print(f"Copyright 2019-2026 Research Computing Center, University of Chicago")
+    pwd = os.environ['PWD']
+    cmd = f"cd {skywayroot}; git describe --always; cd {pwd}"
+    p = subprocess.run(cmd, shell=True, text=True, capture_output=True)
+    print(f"commit: {p.stdout}")
+
+
+    print(f"List of useful commands:")
+    headers=["Command", 'Description', 'Usage']
+    
+    data = []
+    command = "skyway_nodetypes"
+    description = "List all the VM types accessible by a cloud account"
+    usage = "skyway_nodetypes -A rcc-aws"
+    data.append([command, description, usage])
+
+    command = "skyway_alloc"
+    description = "Allocate/provision an instance"
+    usage = "skyway_alloc -A rcc-aws -t 00:30:00 --constraint=t1"
+    data.append([command, description, usage])
+
+    command = "skyway_list"
+    description = "List all the running instances under a cloud account "
+    usage = "skyway_list -A rcc-aws"
+    data.append([command, description, usage])
+
+    command = "skyway_cancel"
+    description = "Terminate a running instance under a cloud account "
+    usage = "skyway_cancel -A rcc-aws your-run"
+    data.append([command, description, usage])
+
+    command = "skyway_transfer"
+    description = "Tranfer data from/to a running instance under a cloud account "
+    usage = "skyway_transfer -A rcc-aws -J your-run training.py input.data; or\nskyway_transfer -A rcc-aws -J your-run --from-cloud --cloud-path=~/output.txt $HOME/output.txt"
+    data.append([command, description, usage])
+
+    command = "skyway_connect"
+    description = "Connect to a running instance under a cloud account "
+    usage = "skyway_connect -A rcc-aws -J your-run"
+    data.append([command, description, usage])
+
+    command = "skyway_stop"
+    description = "Stop to a running instance under a cloud account, the data on the instance is not removed."
+    usage = "skyway_stop -A rcc-aws -i [instance-id]"
+    data.append([command, description, usage])
+
+    command = "skyway_restart"
+    description = "Restart to a stopped instance under a cloud account."
+    usage = "skyway_stop -A rcc-aws -i [instance-id]"
+    data.append([command, description, usage])
+
+    command = "skyway_interactive"
+    description = "Create an interactive session on an instance under a cloud account "
+    usage = "skyway_interactive -A rcc-aws -t 00:30:00 --constraint=g5"
+    data.append([command, description, usage])
+
+    command = "skyway_batch"
+    description = "Submit a job script under a cloud account "
+    usage = "skyway_batch job_script.sh"
+    data.append([command, description, usage])
+
+    command = "skyway_advisor"
+    description = "Find resources for a job script"
+    usage = "skyway_advisor job_script.sh"
+    data.append([command, description, usage])
+
+    print(tabulate(data, headers=headers))
+    print("")
